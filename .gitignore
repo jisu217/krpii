@@ -1,0 +1,14 @@
+# Rust build output
+/target/
+
+# Python build artifacts (bindings)
+__pycache__/
+*.py[cod]
+*.so
+dist/
+.venv/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store

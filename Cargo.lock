@@ -146,9 +146,12 @@ dependencies = [
 name = "krpii-bench"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "clap",
  "krpii-core",
  "regex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

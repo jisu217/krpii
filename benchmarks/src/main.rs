@@ -8,23 +8,31 @@
 //! The corpus is regenerated from a seed on every run rather than stored, so
 //! the repository never ships thousands of checksum-valid identifiers.
 //!
+//! External detectors are compared by exporting the corpus, running the tool
+//! on it, and scoring its predictions here (see [`external`]).
+//!
 //! ```console
 //! $ cargo run --release -p krpii-bench
 //! $ cargo run --release -p krpii-bench -- --samples 20000 --show-errors 5
+//! $ cargo run --release -p krpii-bench -- --export-corpus target/corpus.jsonl
+//! $ cargo run --release -p krpii-bench -- --predictions "Presidio=target/presidio.jsonl"
 //! ```
 
 mod baseline;
 mod corpus;
+mod external;
 mod generators;
 mod metrics;
 mod rng;
 
 use std::fmt::Write as _;
+use std::path::PathBuf;
 
+use anyhow::Result;
 use clap::Parser;
 use krpii_core::{Detector, EntityType};
 
-use crate::metrics::{Counts, ErrorKind, Report};
+use crate::metrics::{ErrorKind, Prediction, Report};
 
 /// Benchmark krpii on a synthetic Korean corpus.
 #[derive(Debug, Parser)]
@@ -41,20 +49,68 @@ struct Args {
     /// Print up to this many krpii false positives and false negatives per entity type.
     #[arg(long, default_value_t = 0, value_name = "N")]
     show_errors: usize,
+
+    /// Write the corpus (without labels) as JSON Lines to this path and exit.
+    #[arg(long, value_name = "PATH")]
+    export_corpus: Option<PathBuf>,
+
+    /// Score an external tool's predictions; may be repeated.
+    #[arg(long, value_name = "NAME=PATH", value_parser = parse_named_path)]
+    predictions: Vec<NamedPath>,
 }
 
-fn main() {
+/// A display name paired with a file path, parsed from `NAME=PATH`.
+#[derive(Debug, Clone)]
+struct NamedPath {
+    name: String,
+    path: PathBuf,
+}
+
+fn parse_named_path(value: &str) -> Result<NamedPath, String> {
+    match value.split_once('=') {
+        Some((name, path)) if !name.is_empty() && !path.is_empty() => Ok(NamedPath {
+            name: name.to_owned(),
+            path: PathBuf::from(path),
+        }),
+        _ => Err(format!("expected NAME=PATH, got {value:?}")),
+    }
+}
+
+fn main() -> Result<()> {
     let args = Args::parse();
     let samples = corpus::generate(args.seed, args.samples);
+
+    if let Some(path) = &args.export_corpus {
+        external::export_corpus(&samples, path)?;
+        eprintln!("Wrote {} samples to {}", samples.len(), path.display());
+        return Ok(());
+    }
+
     let detector = Detector::new();
-    let krpii = metrics::evaluate(|text| detector.detect(text), &samples);
-    let baseline = metrics::evaluate(baseline::detect, &samples);
+    let krpii = metrics::evaluate(|_, text| to_predictions(detector.detect(text)), &samples);
+    let baseline = metrics::evaluate(|_, text| to_predictions(baseline::detect(text)), &samples);
+
+    let mut externals = Vec::with_capacity(args.predictions.len());
+    for NamedPath { name, path } in &args.predictions {
+        let predictions = external::load_predictions(&samples, path)?;
+        let report = metrics::evaluate(|index, _| predictions[index].clone(), &samples);
+        externals.push((name.as_str(), report));
+    }
+
+    let mut systems: Vec<(&str, &Report)> = vec![("Regex only", &baseline)];
+    systems.extend(externals.iter().map(|(name, report)| (*name, report)));
+    systems.push(("krpii", &krpii));
 
     print!("{}", render_evaluation(&krpii, &args));
-    print!("{}", render_comparison(&krpii, &baseline));
+    print!("{}", render_comparison(&systems));
     if args.show_errors > 0 {
         print!("{}", render_errors(&krpii, args.show_errors));
     }
+    Ok(())
+}
+
+fn to_predictions(entities: Vec<krpii_core::Entity>) -> Vec<Prediction> {
+    entities.into_iter().map(Prediction::from).collect()
 }
 
 fn render_evaluation(report: &Report, args: &Args) -> String {
@@ -113,47 +169,49 @@ fn render_evaluation(report: &Report, args: &Args) -> String {
     out
 }
 
-fn render_comparison(krpii: &Report, baseline: &Report) -> String {
-    let mut out = String::from("\n## Comparison with a regex-only baseline\n\n");
-    out.push_str(
-        "| Entity | Precision (regex) | Precision (krpii) | Recall (regex) | Recall (krpii) |\n",
-    );
+fn render_comparison(systems: &[(&str, &Report)]) -> String {
+    let mut out = String::from("\n## Comparison\n\n");
+    out.push_str("| System | Precision | Recall | F1 | Decoys flagged as PII |\n");
     out.push_str("|---|--:|--:|--:|--:|\n");
-    let rows = krpii
-        .per_type
-        .iter()
-        .map(|(t, k)| (format!("`{t}`"), baseline.per_type[t], *k))
-        .chain(std::iter::once((
-            "**Overall (micro)**".to_owned(),
-            baseline.overall(),
-            krpii.overall(),
-        )));
-    for (label, regex, ours) in rows {
-        let _ = writeln!(out, "| {label} | {} |", comparison_cells(regex, ours));
+    for (name, report) in systems {
+        let overall = report.overall();
+        let _ = writeln!(
+            out,
+            "| {name} | {:.3} | {:.3} | {:.3} | {:.1}% |",
+            overall.precision(),
+            overall.recall(),
+            overall.f1(),
+            report.decoys_overall().rate() * 100.0
+        );
     }
 
-    let (regex_decoys, krpii_decoys) = (baseline.decoys_overall(), krpii.decoys_overall());
-    let _ = writeln!(
-        out,
-        "\nDecoys flagged as PII: regex {} of {} ({:.1}%), krpii {} of {} ({:.1}%).",
-        regex_decoys.flagged,
-        regex_decoys.total,
-        regex_decoys.rate() * 100.0,
-        krpii_decoys.flagged,
-        krpii_decoys.total,
-        krpii_decoys.rate() * 100.0
-    );
-    out
-}
+    out.push_str("\nPer entity, precision / recall:\n\n| Entity |");
+    for (name, _) in systems {
+        let _ = write!(out, " {name} |");
+    }
+    out.push_str("\n|---|");
+    out.push_str(&"--:|".repeat(systems.len()));
+    out.push('\n');
+    for entity_type in EntityType::ALL {
+        let _ = write!(out, "| `{entity_type}` |");
+        for (_, report) in systems {
+            let counts = report.per_type[&entity_type];
+            let _ = write!(out, " {:.3} / {:.3} |", counts.precision(), counts.recall());
+        }
+        out.push('\n');
+    }
 
-fn comparison_cells(regex: Counts, krpii: Counts) -> String {
-    format!(
-        "{:.3} | {:.3} | {:.3} | {:.3}",
-        regex.precision(),
-        krpii.precision(),
-        regex.recall(),
-        krpii.recall()
-    )
+    for (name, report) in systems {
+        if report.other_false_positives > 0 {
+            let _ = writeln!(
+                out,
+                "\n{name} also reported {} detections of types outside krpii's taxonomy, \
+                 counted as false positives in its overall precision.",
+                report.other_false_positives
+            );
+        }
+    }
+    out
 }
 
 fn render_errors(report: &Report, limit: usize) -> String {

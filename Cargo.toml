@@ -7,6 +7,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
+readme = "README.md"
 authors = ["jisu217"]
 repository = "https://github.com/jisu217/krpii"
 homepage = "https://github.com/jisu217/krpii"

@@ -2,7 +2,8 @@
 //!
 //! The baseline uses the same candidate shapes and digit-boundary rule as
 //! krpii but performs no validation: no checksums, no birth-date checks, no
-//! separator consistency, and no exclusion of service prefixes. Comparing it
+//! separator consistency, no exclusion of service prefixes, and no rejection
+//! of documentation placeholder keys. Comparing it
 //! with krpii on the same corpus therefore isolates the contribution of the
 //! validation stage, rather than pitting krpii against a strawman.
 
@@ -12,8 +13,19 @@ use krpii_core::{Entity, EntityType};
 use regex::Regex;
 
 /// Candidate patterns in priority order; earlier entries win ties on overlap.
+/// A pattern with a `password` group reports only that group, as krpii does.
 static PATTERNS: LazyLock<Vec<(EntityType, Regex)>> = LazyLock::new(|| {
     [
+        (
+            EntityType::Secret,
+            concat!(
+                r"(?:sk-(?:ant-|proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{36}",
+                r"|github_pat_[A-Za-z0-9_]{22,}|(?:AKIA|ASIA)[0-9A-Z]{16}|xox[abeoprs]-[A-Za-z0-9-]{10,}",
+                r"|AIza[0-9A-Za-z_-]{35}|(?:sk|rk)_live_[0-9A-Za-z]{24,})",
+                r"|-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----(?s:.*?)-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----",
+                r"|(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?)://[^\s:/@]+:(?P<password>[^\s@/]+)@",
+            ),
+        ),
         (
             EntityType::Email,
             r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
@@ -44,7 +56,11 @@ const SCORE: f64 = 1.0;
 pub fn detect(text: &str) -> Vec<Entity> {
     let mut candidates: Vec<(usize, Entity)> = Vec::new();
     for (priority, (entity_type, regex)) in PATTERNS.iter().enumerate() {
-        for found in regex.find_iter(text) {
+        for captures in regex.captures_iter(text) {
+            let found = captures
+                .name("password")
+                .or_else(|| captures.get(0))
+                .expect("group 0 always participates");
             if is_isolated(text, found.start(), found.end()) {
                 candidates.push((
                     priority,
@@ -76,9 +92,9 @@ fn is_isolated(text: &str, start: usize, end: usize) -> bool {
     let bytes = text.as_bytes();
     let preceded = start
         .checked_sub(1)
-        .is_some_and(|i| bytes[i].is_ascii_digit() || bytes[i] == b'-');
+        .is_some_and(|i| bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-');
     let followed = match bytes.get(end) {
-        Some(b) if b.is_ascii_digit() => true,
+        Some(b) if b.is_ascii_alphanumeric() => true,
         Some(b'-') => bytes.get(end + 1).is_some_and(u8::is_ascii_digit),
         _ => false,
     };

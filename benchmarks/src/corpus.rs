@@ -40,6 +40,20 @@ const PII_FRAMES: &[(&str, &str)] = &[
     ("", ""),
 ];
 
+/// Frames for credentials, in the places they usually leak from: environment
+/// files, shell exports, HTTP headers, and prose.
+const SECRET_FRAMES: &[(&str, &str)] = &[
+    ("OPENAI_API_KEY=", ""),
+    ("export GITHUB_TOKEN=", ""),
+    ("Authorization: Bearer ", ""),
+    ("키 값은 ", "입니다"),
+    ("", ""),
+];
+
+/// Share of credentials generated as a connection-string password rather than
+/// a token or private key.
+const DB_PASSWORD_RATIO: f64 = 0.25;
+
 /// Frames that place each decoy in a realistic context.
 fn decoy_frame(kind: DecoyKind) -> (&'static str, &'static str) {
     match kind {
@@ -52,6 +66,9 @@ fn decoy_frame(kind: DecoyKind) -> (&'static str, &'static str) {
         DecoyKind::ServiceNumber => ("고객센터 ", ""),
         DecoyKind::PostalCode => ("우편번호 ", ""),
         DecoyKind::IpAddress => ("접속 IP ", ""),
+        DecoyKind::CommitHash => ("커밋 ", " 기준으로 배포"),
+        DecoyKind::Uuid => ("request_id=", ""),
+        DecoyKind::PlaceholderKey => ("예시: ", ""),
     }
 }
 
@@ -84,8 +101,21 @@ fn sample(rng: &mut Rng) -> Sample {
         }
         if rng.chance(PII_RATIO) {
             let entity_type = *rng.pick(&EntityType::ALL);
-            let (prefix, suffix) = *rng.pick(PII_FRAMES);
-            let value = generators::entity(rng, entity_type);
+            let (prefix, value, suffix) = if entity_type != EntityType::Secret {
+                let (prefix, suffix) = *rng.pick(PII_FRAMES);
+                (prefix, generators::entity(rng, entity_type), suffix)
+            } else if rng.chance(DB_PASSWORD_RATIO) {
+                // Only the password is sensitive, so the URL around it is the frame.
+                let password = generators::db_password(rng);
+                (
+                    "DATABASE_URL=postgres://app:",
+                    password,
+                    "@db.internal:5432/app",
+                )
+            } else {
+                let (prefix, suffix) = *rng.pick(SECRET_FRAMES);
+                (prefix, generators::entity(rng, entity_type), suffix)
+            };
             builder.push_framed(prefix, &value, suffix, Label::Pii(entity_type));
         } else {
             let kind = *rng.pick(&DecoyKind::ALL);

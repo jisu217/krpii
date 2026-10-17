@@ -6,7 +6,8 @@ use std::str::FromStr;
 
 use crate::error::ParseError;
 
-/// Categories of personally identifiable information that krpii can detect.
+/// Categories of sensitive data that krpii can detect: Korean personally
+/// identifiable information and credentials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum EntityType {
     /// Korean mobile, landline, and `VoIP` telephone numbers.
@@ -19,13 +20,26 @@ pub enum EntityType {
     Rrn,
     /// Business registration numbers (사업자등록번호).
     Brn,
+    /// Credentials with an unambiguous format: API keys and tokens, private key
+    /// blocks, and passwords embedded in database connection strings.
+    Secret,
 }
 
 impl EntityType {
     /// Every supported entity type, in canonical order.
-    pub const ALL: [Self; 5] = [Self::Phone, Self::Email, Self::Card, Self::Rrn, Self::Brn];
+    pub const ALL: [Self; 6] = [
+        Self::Phone,
+        Self::Email,
+        Self::Card,
+        Self::Rrn,
+        Self::Brn,
+        Self::Secret,
+    ];
 
-    const NAMES: &'static [&'static str] = &["PHONE", "EMAIL", "CARD", "RRN", "BRN"];
+    /// The Korean personally identifiable information types, excluding credentials.
+    pub const PII: [Self; 5] = [Self::Phone, Self::Email, Self::Card, Self::Rrn, Self::Brn];
+
+    const NAMES: &'static [&'static str] = &["PHONE", "EMAIL", "CARD", "RRN", "BRN", "SECRET"];
 
     /// The stable, upper-case label used in tags, CLI flags, and serialized output.
     #[must_use]
@@ -36,6 +50,7 @@ impl EntityType {
             Self::Card => "CARD",
             Self::Rrn => "RRN",
             Self::Brn => "BRN",
+            Self::Secret => "SECRET",
         }
     }
 }
@@ -132,6 +147,10 @@ mod tests {
     #[test]
     fn unknown_entity_type_lists_valid_options() {
         let error = "PASSPORT".parse::<EntityType>().unwrap_err();
-        assert!(error.to_string().contains("PHONE, EMAIL, CARD, RRN, BRN"));
+        assert!(
+            error
+                .to_string()
+                .contains("PHONE, EMAIL, CARD, RRN, BRN, SECRET")
+        );
     }
 }

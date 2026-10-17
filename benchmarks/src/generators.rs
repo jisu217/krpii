@@ -11,7 +11,7 @@ use krpii_core::checksum::{brn_is_valid, luhn_is_valid, rrn_checksum_is_valid};
 
 use crate::rng::Rng;
 
-/// Non-PII numeric text that commonly appears next to PII.
+/// Text that resembles PII or credentials but is neither.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DecoyKind {
     /// 16-digit order ID; about one in ten passes Luhn by chance.
@@ -32,10 +32,17 @@ pub enum DecoyKind {
     PostalCode,
     /// IPv4 address.
     IpAddress,
+    /// 40-character hexadecimal commit hash.
+    CommitHash,
+    /// Random UUID, as found in request IDs.
+    Uuid,
+    /// Credential placeholder copied from documentation, such as
+    /// `AKIAIOSFODNN7EXAMPLE` or `postgres://app:password@localhost/app`.
+    PlaceholderKey,
 }
 
 impl DecoyKind {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 12] = [
         Self::OrderId,
         Self::TrackingNumber,
         Self::MemberId,
@@ -45,6 +52,9 @@ impl DecoyKind {
         Self::ServiceNumber,
         Self::PostalCode,
         Self::IpAddress,
+        Self::CommitHash,
+        Self::Uuid,
+        Self::PlaceholderKey,
     ];
 
     pub fn label(self) -> &'static str {
@@ -58,6 +68,9 @@ impl DecoyKind {
             Self::ServiceNumber => "Service number (1588, 080)",
             Self::PostalCode => "Postal code",
             Self::IpAddress => "IPv4 address",
+            Self::CommitHash => "Commit hash",
+            Self::Uuid => "UUID",
+            Self::PlaceholderKey => "Documentation placeholder key",
         }
     }
 }
@@ -70,6 +83,7 @@ pub fn entity(rng: &mut Rng, entity_type: EntityType) -> String {
         EntityType::Card => card(rng),
         EntityType::Rrn => rrn(rng),
         EntityType::Brn => brn(rng),
+        EntityType::Secret => secret(rng),
     }
 }
 
@@ -112,7 +126,64 @@ pub fn decoy(rng: &mut Rng, kind: DecoyKind) -> String {
             rng.below(256),
             rng.range(1, 254)
         ),
+        DecoyKind::CommitHash => random_chars(rng, HEX, 40),
+        DecoyKind::Uuid => format!(
+            "{}-{}-4{}-{}-{}",
+            random_chars(rng, HEX, 8),
+            random_chars(rng, HEX, 4),
+            random_chars(rng, HEX, 3),
+            random_chars(rng, HEX, 4),
+            random_chars(rng, HEX, 12)
+        ),
+        DecoyKind::PlaceholderKey => (*rng.pick(&[
+            "AKIAIOSFODNN7EXAMPLE",
+            "sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "sk-ant-your-api-key-goes-here",
+            "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "postgres://app:password@localhost:5432/app",
+            "mysql://root:${DB_PASSWORD}@db:3306/app",
+        ]))
+        .to_owned(),
     }
+}
+
+const HEX: &[u8] = b"0123456789abcdef";
+const ALNUM: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+const UPPER_ALNUM: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+const BASE64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// Returns `length` characters drawn uniformly from `charset`.
+fn random_chars(rng: &mut Rng, charset: &[u8], length: usize) -> String {
+    (0..length)
+        .map(|_| char::from(*rng.pick(charset)))
+        .collect()
+}
+
+/// Generates a synthetic API key, token, or private key block. Bodies are
+/// random, so no value matches a real credential.
+fn secret(rng: &mut Rng) -> String {
+    match rng.below(8) {
+        0 => format!("sk-ant-api03-{}", random_chars(rng, ALNUM, 48)),
+        1 => format!("sk-proj-{}", random_chars(rng, ALNUM, 48)),
+        2 => format!("ghp_{}", random_chars(rng, ALNUM, 36)),
+        3 => format!("github_pat_{}", random_chars(rng, ALNUM, 40)),
+        4 => format!("AKIA{}", random_chars(rng, UPPER_ALNUM, 16)),
+        5 => format!("xoxb-{}-{}", rng.digits(12), random_chars(rng, ALNUM, 24)),
+        6 => format!("AIza{}", random_chars(rng, ALNUM, 35)),
+        _ => {
+            let lines: Vec<String> = (0..3).map(|_| random_chars(rng, BASE64, 64)).collect();
+            format!(
+                "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----",
+                lines.join("\n")
+            )
+        }
+    }
+}
+
+/// Generates a synthetic password for a database connection string.
+pub fn db_password(rng: &mut Rng) -> String {
+    let length = rng.range(12, 20);
+    format!("{}!{}", random_chars(rng, ALNUM, length), rng.digits(2))
 }
 
 fn phone(rng: &mut Rng) -> String {

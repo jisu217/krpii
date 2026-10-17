@@ -1,7 +1,25 @@
 # krpii
 
-Korean PII detection and masking for LLM prompts and logs. Runs locally as a single binary,
-with a Rust library for embedding.
+Korean PII detection for AI coding workflows.
+
+Logs, support tickets, and data samples can carry personal identifiers into an agent session.
+krpii checks submitted prompts and file reads in Claude Code, blocking supported identifiers
+before they reach the model through those paths. Detection runs locally without a model download.
+
+### Claude Code
+
+```sh
+cargo install krpii
+claude plugin marketplace add jisu217/krpii
+claude plugin install krpii@krpii
+```
+
+The plugin blocks submitted prompts containing detected PII and denies `Read` calls on scanned
+files containing it. A denied read suggests a command to produce masked output; the plugin does
+not create a masked copy automatically.
+
+The `krpii` binary must be on `PATH` and include the `hook` subcommand.
+Building from source requires Rust 1.85+.
 
 ### Features
 
@@ -12,18 +30,16 @@ with a Rust library for embedding.
 Supports Korean phone numbers, email addresses, payment cards, resident registration numbers,
 and business registration numbers.
 
-### Quick start
+### CLI & library
 
 ```sh
-cargo install krpii
-
 krpii mask prompt.txt --style tag --types phone,email,rrn
 krpii mask application.log                 # Partial masking
 krpii scan application.log                 # JSON Lines, without matched values
 ```
 
-Building from source requires Rust 1.85+. Omit the file or use `-` to read stdin.
-For Rust applications, install the library with `cargo add krpii-core`.
+Omit the file or use `-` to read stdin. For Rust applications, install the library with
+`cargo add krpii-core`.
 
 `scan` reports UTF-8 byte spans and exits with `1` when it finds a match, `0` otherwise.
 `mask` exits with `0` on success; both use `2` for usage or I/O errors.
@@ -50,6 +66,11 @@ cargo run --release --locked -p krpii-bench
 ```
 
 ### Limitations
+
+The plugin checks submitted prompts and `Read` calls only. Shell and search-tool output is not
+inspected; binary files and files larger than 16 MiB are skipped. Blocked prompts may still
+appear in local history or transcripts. This is a guard for specific input paths, not a complete
+boundary against data exposure.
 
 Names, addresses, and unsupported formats remain unchanged; context labels can suppress valid
 matches. Partial masking retains identifying information. Tag mode removes detected values

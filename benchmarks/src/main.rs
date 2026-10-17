@@ -171,10 +171,13 @@ fn render_evaluation(report: &Report, args: &Args) -> String {
 
 fn render_comparison(systems: &[(&str, &Report)]) -> String {
     let mut out = String::from("\n## Comparison\n\n");
+    // Credentials are excluded: Presidio has no credential recognizers, so
+    // including them would penalize it for a task it does not attempt.
+    out.push_str("Korean PII types only; credentials are reported in the krpii table above.\n\n");
     out.push_str("| System | Precision | Recall | F1 | Decoys flagged as PII |\n");
     out.push_str("|---|--:|--:|--:|--:|\n");
     for (name, report) in systems {
-        let overall = report.overall();
+        let overall = report.overall_for(&EntityType::PII);
         let _ = writeln!(
             out,
             "| {name} | {:.3} | {:.3} | {:.3} | {:.1}% |",
@@ -192,7 +195,7 @@ fn render_comparison(systems: &[(&str, &Report)]) -> String {
     out.push_str("\n|---|");
     out.push_str(&"--:|".repeat(systems.len()));
     out.push('\n');
-    for entity_type in EntityType::ALL {
+    for entity_type in EntityType::PII {
         let _ = write!(out, "| `{entity_type}` |");
         for (_, report) in systems {
             let counts = report.per_type[&entity_type];

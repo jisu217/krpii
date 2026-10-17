@@ -130,12 +130,21 @@ impl Report {
     /// Micro-averaged counts across all entity types, including detections of
     /// types outside krpii's taxonomy as false positives.
     pub fn overall(&self) -> Counts {
+        self.overall_for(&EntityType::ALL)
+    }
+
+    /// Micro-averaged counts across `types` only, including detections of types
+    /// outside krpii's taxonomy as false positives. Used to compare systems on
+    /// the entity types they all claim to support.
+    pub fn overall_for(&self, types: &[EntityType]) -> Counts {
         let mut total = Counts {
             false_positives: self.other_false_positives,
             ..Counts::default()
         };
-        for counts in self.per_type.values() {
-            total.add(*counts);
+        for entity_type in types {
+            if let Some(counts) = self.per_type.get(entity_type) {
+                total.add(*counts);
+            }
         }
         total
     }

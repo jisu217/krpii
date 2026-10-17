@@ -47,7 +47,7 @@ impl Recognizer for EmailRecognizer {
         if preceded_by_local_char || followed_by_domain_char {
             return None;
         }
-        if group(captures, "local").contains("..") {
+        if group(captures, "local").contains("..") || in_url_userinfo(text, matched.start()) {
             return None;
         }
         Some(SCORE)
@@ -71,6 +71,23 @@ impl Recognizer for EmailRecognizer {
             .repeat(length - visible.chars().count());
         format!("{visible}{hidden}@{domain}")
     }
+}
+
+/// Returns whether `start` falls in the userinfo of a URL, as in
+/// `postgres://user:password@host`, where `password@host` is not an address.
+///
+/// The check looks back to the start of the whitespace-delimited token: a
+/// `://` with no `/` between it and `start` means the authority section has
+/// not ended yet. Addresses later in a URL, such as in a query string, follow
+/// a `/` and are still detected.
+fn in_url_userinfo(text: &str, start: usize) -> bool {
+    let token_start = text[..start]
+        .rfind(char::is_whitespace)
+        .map_or(0, |i| i + 1);
+    let token = &text[token_start..start];
+    token
+        .rfind("://")
+        .is_some_and(|scheme_end| !token[scheme_end + 3..].contains('/'))
 }
 
 fn is_local_part_byte(b: u8) -> bool {
@@ -111,6 +128,18 @@ mod tests {
         ] {
             assert!(found(text).is_empty(), "input: {text}");
         }
+    }
+
+    #[test]
+    fn ignores_text_inside_url_userinfo() {
+        assert!(
+            found("postgres://app:s3cret!70@db.internal:5432/app").is_empty(),
+            "userinfo"
+        );
+        assert_eq!(
+            found("https://example.com/unsubscribe?email=hong@example.com"),
+            ["hong@example.com"]
+        );
     }
 
     #[test]

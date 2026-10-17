@@ -15,6 +15,9 @@ mod card;
 mod email;
 mod phone;
 mod rrn;
+mod secret;
+
+use std::ops::Range;
 
 use regex::{Captures, Regex};
 
@@ -43,6 +46,18 @@ pub(crate) trait Recognizer: Sync {
     /// that the masked text remains readable.
     fn mask_partial(&self, value: &str) -> String;
 
+    /// Returns the byte range to report for a validated candidate.
+    ///
+    /// Defaults to the whole match. A recognizer overrides it when only part
+    /// of the match is sensitive, such as the password inside a connection
+    /// string, so masking leaves the surrounding context intact.
+    fn span(&self, captures: &Captures<'_>) -> Range<usize> {
+        captures
+            .get(0)
+            .expect("group 0 always participates")
+            .range()
+    }
+
     /// Returns every validated entity of this recognizer's type in `text`.
     fn find(&self, text: &str) -> Vec<Entity> {
         let pattern = self.pattern();
@@ -51,10 +66,11 @@ pub(crate) trait Recognizer: Sync {
         while let Some(captures) = pattern.captures_at(text, position) {
             let matched = captures.get(0).expect("group 0 always participates");
             if let Some(score) = self.score(text, &captures) {
+                let span = self.span(&captures);
                 entities.push(Entity {
                     entity_type: self.entity_type(),
-                    start: matched.start(),
-                    end: matched.end(),
+                    start: span.start,
+                    end: span.end,
                     score,
                 });
                 position = matched.end();
@@ -74,22 +90,26 @@ pub(crate) fn recognizer_for(entity_type: EntityType) -> &'static dyn Recognizer
         EntityType::Card => &card::CardRecognizer,
         EntityType::Rrn => &rrn::ResidentRegistrationNumberRecognizer,
         EntityType::Brn => &brn::BusinessRegistrationNumberRecognizer,
+        EntityType::Secret => &secret::SecretRecognizer,
     }
 }
 
-/// Returns whether the span `start..end` is not glued to adjacent digits.
+/// Returns whether the span `start..end` is not glued to adjacent identifier
+/// characters.
 ///
 /// Korean text attaches particles directly to tokens ("010-1234-5678로"), so
-/// word boundaries are unreliable. A numeric entity is instead considered
-/// isolated when it is neither preceded by a digit or hyphen nor followed by a
-/// digit, optionally after a single hyphen.
+/// Unicode word boundaries are unreliable. A numeric entity is instead
+/// considered isolated when it is neither preceded by an ASCII letter, digit,
+/// or hyphen nor followed by an ASCII letter or digit, or by a hyphen and a
+/// digit. Hangul on either side is allowed, while digit runs inside hashes,
+/// UUIDs, and other identifiers are rejected.
 pub(crate) fn has_digit_boundaries(text: &str, start: usize, end: usize) -> bool {
     let bytes = text.as_bytes();
     let preceded = start
         .checked_sub(1)
-        .is_some_and(|i| bytes[i].is_ascii_digit() || bytes[i] == b'-');
+        .is_some_and(|i| bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-');
     let followed = match bytes.get(end) {
-        Some(b) if b.is_ascii_digit() => true,
+        Some(b) if b.is_ascii_alphanumeric() => true,
         Some(b'-') => bytes.get(end + 1).is_some_and(u8::is_ascii_digit),
         _ => false,
     };
@@ -223,6 +243,13 @@ mod tests {
         ] {
             assert!(!is_labeled_non_pii(text, text.len() - 4), "input: {text}");
         }
+    }
+
+    #[test]
+    fn digit_boundaries_reject_digit_runs_inside_identifiers() {
+        let hash = "8f13b2b0213660407c7ba5e79dc600f66296911e";
+        let start = hash.find("0213660407").unwrap();
+        assert!(!has_digit_boundaries(hash, start, start + 10));
     }
 
     #[test]

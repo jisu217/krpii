@@ -170,3 +170,18 @@ fn hook_errors_do_not_block() {
     let output = run(&["hook"], "not json");
     assert_eq!(output.status.code(), Some(1));
 }
+
+#[test]
+fn hook_denies_reading_an_env_file_with_a_credential() {
+    // Assembled at runtime so no complete credential literal lives in the source.
+    let token = format!("ghp_{}", "a1B2c3D4e5".repeat(4).get(..36).unwrap());
+    let path = temp_file("hook-secret.env", &format!("GITHUB_TOKEN={token}\n"));
+    let output = run(&["hook"], &read_event(&path));
+    assert_eq!(output.status.code(), Some(0));
+    let out = stdout(&output);
+    assert!(
+        out.contains(r#""permissionDecision":"deny""#),
+        "stdout: {out}"
+    );
+    assert!(out.contains("1 SECRET"), "stdout: {out}");
+}

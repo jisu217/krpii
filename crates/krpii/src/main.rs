@@ -45,7 +45,7 @@ enum Command {
     /// Print the input with every detected entity masked.
     Mask(MaskArgs),
     /// Run as a Claude Code hook: read an event as JSON on standard input and
-    /// print a decision when it carries PII.
+    /// print a decision when it carries credentials or PII.
     Hook,
 }
 

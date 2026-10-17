@@ -1,5 +1,5 @@
 {
-  "description": "Runs `krpii hook` on submitted prompts and on Read tool calls. Requires the krpii binary on PATH.",
+  "description": "Runs `krpii hook` on submitted prompts, before Read calls, and after Bash and Grep calls. Requires the krpii binary on PATH.",
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -11,6 +11,14 @@
     "PreToolUse": [
       {
         "matcher": "Read",
+        "hooks": [
+          { "type": "command", "command": "krpii", "args": ["hook"], "timeout": 10 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Grep",
         "hooks": [
           { "type": "command", "command": "krpii", "args": ["hook"], "timeout": 10 }
         ]

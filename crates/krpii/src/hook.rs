@@ -7,6 +7,11 @@
 //!   from the block message so the PII is not echoed back into the transcript.
 //! - `PreToolUse` for the `Read` tool: denies the read and tells Claude how to
 //!   read a masked copy instead, so the task can continue without the values.
+//! - `PostToolUse` for tools whose output cannot be predicted, such as `Bash`
+//!   and `Grep`: replaces each detected value in the output with its type tag,
+//!   such as `<PHONE>`, before Claude sees it. The output keeps its exact JSON
+//!   shape, because Claude Code ignores a replacement that does not match the
+//!   tool's output schema.
 //!
 //! Events without PII, and events this adapter does not handle, produce no
 //! output, which leaves the decision to Claude Code's normal flow.
@@ -17,7 +22,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use krpii_core::{Detector, Entity};
+use krpii_core::{Detector, Entity, MaskStyle, apply_mask};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -41,6 +46,8 @@ struct HookInput {
     tool_name: Option<String>,
     #[serde(default)]
     tool_input: Option<ToolInput>,
+    #[serde(default)]
+    tool_response: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,6 +74,9 @@ pub fn decide(input: &str) -> Result<Option<Value>> {
             .and_then(|path| scan_file(&detector, &path).map(|entities| (path, entities)))
             .filter(|(_, entities)| !entities.is_empty())
             .map(|(path, entities)| deny_read(&path, &entities)),
+        "PostToolUse" => event
+            .tool_response
+            .and_then(|output| mask_tool_output(&detector, output)),
         _ => None,
     };
     Ok(decision)
@@ -97,6 +107,48 @@ fn deny_read(path: &Path, entities: &[Entity]) -> Value {
             ),
         }
     })
+}
+
+/// Replaces every detected value in the string fields of `output` with its type
+/// tag, or returns `None` when nothing was detected.
+///
+/// Only string values change; keys, arrays, numbers, and booleans are kept, so
+/// the replacement always matches the schema of the tool that produced it.
+fn mask_tool_output(detector: &Detector, mut output: Value) -> Option<Value> {
+    let mut found = Vec::new();
+    mask_strings(detector, &mut output, &mut found);
+    (!found.is_empty()).then(|| {
+        json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "updatedToolOutput": output,
+                "additionalContext": format!(
+                    "krpii masked {} in this tool output. Tags such as <RRN> stand in for \
+                     the original values, which were not shown.",
+                    describe(&found)
+                ),
+            }
+        })
+    })
+}
+
+fn mask_strings(detector: &Detector, value: &mut Value, found: &mut Vec<Entity>) {
+    match value {
+        Value::String(text) => {
+            let entities = detector.detect(text);
+            if !entities.is_empty() {
+                *text = apply_mask(text, &entities, MaskStyle::Tag);
+                found.extend(entities);
+            }
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| mask_strings(detector, item, found)),
+        Value::Object(fields) => fields
+            .values_mut()
+            .for_each(|field| mask_strings(detector, field, found)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
 }
 
 /// Scans the file at `path`, or returns `None` when it should not be scanned:
@@ -169,6 +221,68 @@ mod tests {
     fn read_of_a_missing_file_is_left_to_claude_code() {
         let input = json!({ "hook_event_name": "PreToolUse", "tool_name": "Read",
                             "tool_input": { "file_path": "/nonexistent/krpii-test.log" } });
+        assert_eq!(decide(&input.to_string()).unwrap(), None);
+    }
+
+    #[test]
+    fn shell_output_is_masked_with_its_shape_preserved() {
+        let input = json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": { "command": "cat customers.csv" },
+            "tool_response": {
+                "stdout": "hong,010-1234-5678\nkim,kim@example.com\n",
+                "stderr": "",
+                "interrupted": false,
+                "isImage": false
+            }
+        });
+        let decision = decide(&input.to_string()).unwrap().unwrap();
+        let output = &decision["hookSpecificOutput"];
+        assert_eq!(output["hookEventName"], "PostToolUse");
+        assert_eq!(
+            output["updatedToolOutput"],
+            json!({
+                "stdout": "hong,<PHONE>\nkim,<EMAIL>\n",
+                "stderr": "",
+                "interrupted": false,
+                "isImage": false
+            })
+        );
+        assert!(
+            output["additionalContext"]
+                .as_str()
+                .unwrap()
+                .contains("2 values")
+        );
+    }
+
+    #[test]
+    fn nested_search_output_is_masked() {
+        let input = json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Grep",
+            "tool_response": {
+                "mode": "content",
+                "numLines": 1,
+                "content": "app.log:3: user phone=010-1234-5678",
+                "filenames": ["app.log"]
+            }
+        });
+        let decision = decide(&input.to_string()).unwrap().unwrap();
+        let output = &decision["hookSpecificOutput"]["updatedToolOutput"];
+        assert_eq!(output["content"], "app.log:3: user phone=<PHONE>");
+        assert_eq!(output["numLines"], 1);
+        assert_eq!(output["filenames"], json!(["app.log"]));
+    }
+
+    #[test]
+    fn clean_tool_output_is_left_alone() {
+        let input = json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_response": { "stdout": "build finished in 3.2s\n", "stderr": "" }
+        });
         assert_eq!(decide(&input.to_string()).unwrap(), None);
     }
 

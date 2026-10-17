@@ -1,6 +1,6 @@
 [package]
 name = "krpii-core"
-description = "Detection engine for Korean personally identifiable information (PII)."
+description = "Detection engine for credentials and Korean PII."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

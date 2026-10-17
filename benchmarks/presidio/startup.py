@@ -2,8 +2,10 @@
 
 Editor hooks start a fresh process for every event, so the relevant latency is
 a cold run that loads the tool and scans one short text, not steady-state
-throughput. Each tool is invoked as a hook would invoke it, several times, and
-the median wall-clock time is reported.
+throughput. Each tool is invoked as a hook would invoke it. After one discarded
+warm-up run per tool, the tools are run in alternation so that any change in
+system load affects both equally, and the median and interquartile range of
+the wall-clock times are reported.
 
 Run with the interpreter of the virtual environment that has Presidio
 installed::
@@ -25,14 +27,22 @@ SAMPLE = "홍길동 010-1234-5678, 주민번호 900101-1234568로 가입했습�
 PREDICT_SCRIPT = Path(__file__).with_name("predict.py")
 
 
-def time_runs(command: list[str], runs: int) -> list[float]:
-    """Return wall-clock seconds for each of ``runs`` fresh invocations."""
-    durations = []
+def time_once(command: list[str]) -> float:
+    """Return the wall-clock seconds of one fresh invocation."""
+    started = time.perf_counter()
+    # krpii exits with 1 when it finds PII, so the exit code is not checked.
+    subprocess.run(command, input=SAMPLE, text=True, capture_output=True)
+    return time.perf_counter() - started
+
+
+def time_alternating(tools: dict[str, list[str]], runs: int) -> dict[str, list[float]]:
+    """Time ``runs`` invocations of each tool, alternating between the tools."""
+    for command in tools.values():
+        time_once(command)  # Warm-up: loads the binaries and libraries into the page cache.
+    durations: dict[str, list[float]] = {name: [] for name in tools}
     for _ in range(runs):
-        started = time.perf_counter()
-        # krpii exits with 1 when it finds PII, so the exit code is not checked.
-        subprocess.run(command, input=SAMPLE, text=True, capture_output=True)
-        durations.append(time.perf_counter() - started)
+        for name, command in tools.items():
+            durations[name].append(time_once(command))
     return durations
 
 
@@ -54,7 +64,7 @@ def runtime_size(site_packages: Path) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--krpii", required=True, type=Path, help="path to a release krpii binary")
-    parser.add_argument("--runs", type=int, default=10, help="invocations per tool")
+    parser.add_argument("--runs", type=int, default=100, help="invocations per tool")
     args = parser.parse_args()
 
     tools = {
@@ -68,13 +78,14 @@ def main() -> None:
         "Presidio": runtime_size(Path(sysconfig.get_paths()["purelib"])),
     }
 
-    print("| Tool | Median per invocation | Fastest | Install size |")
+    print(f"{args.runs} runs per tool, alternating, after one warm-up run each.\n")
+    print("| Tool | Median per invocation | Interquartile range | Install size |")
     print("|---|--:|--:|--:|")
-    for name, command in tools.items():
-        durations = time_runs(command, args.runs)
+    for name, durations in time_alternating(tools, args.runs).items():
+        q1, _, q3 = statistics.quantiles(durations, n=4)
         print(
-            f"| {name} | {statistics.median(durations) * 1000:,.0f} ms "
-            f"| {min(durations) * 1000:,.0f} ms | {sizes[name] / 1024 / 1024:,.1f} MiB |"
+            f"| {name} | {statistics.median(durations) * 1000:,.1f} ms "
+            f"| {q1 * 1000:,.1f}-{q3 * 1000:,.1f} ms | {sizes[name] / 1024 / 1024:,.1f} MiB |"
         )
 
 

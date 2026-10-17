@@ -2,18 +2,20 @@
 
 use std::sync::LazyLock;
 
-use regex::{Captures, Regex};
-
 use super::{
     Recognizer, group, has_digit_boundaries, is_labeled_non_pii, mask_digits, only_digits,
 };
 use crate::checksum::brn_is_valid;
 use crate::entity::EntityType;
+use crate::pattern::{Captures, Pattern, Prefilter};
 
 /// Canonical layout is `XXX-XX-XXXXX`: tax office, business type, serial and check digit.
-static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"[0-9]{3}(?P<s1>[- ]?)[0-9]{2}(?P<s2>[- ]?)[0-9]{5}")
-        .expect("business registration number pattern is valid")
+static PATTERN: LazyLock<Pattern> = LazyLock::new(|| {
+    Pattern::new(
+        r"[0-9]{3}(?P<s1>[- ]?)[0-9]{2}(?P<s2>[- ]?)[0-9]{5}",
+        Prefilter::Disabled,
+    )
+    .expect("business registration number pattern is valid")
 });
 
 const SCORE_SEPARATED: f64 = 0.9;
@@ -31,8 +33,12 @@ impl Recognizer for BusinessRegistrationNumberRecognizer {
         EntityType::Brn
     }
 
-    fn pattern(&self) -> &Regex {
+    fn pattern(&self) -> &Pattern {
         &PATTERN
+    }
+
+    fn may_match(&self, text: &str) -> bool {
+        super::contains_digit(text)
     }
 
     fn score(&self, text: &str, captures: &Captures<'_>) -> Option<f64> {

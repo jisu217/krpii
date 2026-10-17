@@ -54,15 +54,15 @@ Omit the file or use `-` to read stdin. For Rust applications, install the libra
 | System | PII F1 | Decoys flagged | Per invocation | Install size |
 |---|--:|--:|--:|--:|
 | Regex-only baseline | 0.908 | 33.8% | — | — |
-| Presidio 2.2.364 | 0.857 | 17.3% | 1,525 ms | 176.3 MiB |
-| krpii | 0.986 | 0.5% | 8 ms | 1.9 MiB |
+| Presidio 2.2.364 | 0.857 | 17.3% | 1,520 ms | 176.3 MiB |
+| krpii | 0.986 | 0.5% | 6.4 ms | 2.0 MiB |
 
 PII F1 covers the seven Korean PII types. Credentials are scored separately because Presidio has no
 credential recognizers: krpii reaches F1 1.000 on 1,594 synthetic keys, tokens, private keys, and
 connection-string passwords, and flags none of the documentation placeholder keys.
 
-Per-invocation cost is the median of 10 fresh processes scanning one sentence on Apple Silicon,
-the cost an editor hook pays on every event.
+Per-invocation cost is the median of 100 fresh processes scanning one sentence on Apple Silicon,
+alternating between the tools; it is the cost an editor hook pays on every event.
 
 The corpus and detector share an author; these results do not establish real-world accuracy.
 The comparison uses a Korean-configured Presidio adapter and a separate regex baseline, with

@@ -38,6 +38,7 @@ mod detector;
 mod entity;
 mod error;
 mod masking;
+mod pattern;
 mod recognizers;
 
 pub use detector::{Detector, detect};

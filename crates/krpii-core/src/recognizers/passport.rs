@@ -8,16 +8,18 @@
 
 use std::sync::LazyLock;
 
-use regex::{Captures, Regex};
-
 use super::{MASK_CHAR, Recognizer, has_digit_boundaries, is_labeled_non_pii, preceded_by_keyword};
 use crate::entity::EntityType;
+use crate::pattern::{Captures, Pattern, Prefilter};
 
 /// The leading letter encodes the passport type: M (multiple), S (single),
 /// R (residence), O (official), and D (diplomatic).
-static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?P<current>[MSROD][0-9]{3}[A-Z][0-9]{4})|(?P<previous>[MSROD][0-9]{8})")
-        .expect("passport pattern is valid")
+static PATTERN: LazyLock<Pattern> = LazyLock::new(|| {
+    Pattern::new(
+        r"(?P<current>[MSROD][0-9]{3}[A-Z][0-9]{4})|(?P<previous>[MSROD][0-9]{8})",
+        Prefilter::Enabled,
+    )
+    .expect("passport pattern is valid")
 });
 
 /// Keywords that identify a nearby number as a passport number.
@@ -36,8 +38,12 @@ impl Recognizer for PassportRecognizer {
         EntityType::Passport
     }
 
-    fn pattern(&self) -> &Regex {
+    fn pattern(&self) -> &Pattern {
         &PATTERN
+    }
+
+    fn may_match(&self, text: &str) -> bool {
+        super::contains_digit(text)
     }
 
     fn score(&self, text: &str, captures: &Captures<'_>) -> Option<f64> {

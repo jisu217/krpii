@@ -55,6 +55,9 @@ fn decoy_frame(kind: DecoyKind) -> (&'static str, &'static str) {
     }
 }
 
+/// Punctuation placed between segments of a multi-segment sample.
+const SEGMENT_SEPARATORS: &[&str] = &[", ", " / ", ". "];
+
 /// Share of segments that contain PII rather than a decoy.
 const PII_RATIO: f64 = 0.6;
 const MAX_SEGMENTS_PER_SAMPLE: usize = 3;
@@ -69,8 +72,7 @@ fn sample(rng: &mut Rng) -> Sample {
     let mut builder = SampleBuilder::default();
     for index in 0..rng.range(1, MAX_SEGMENTS_PER_SAMPLE) {
         if index > 0 {
-            let separator: &str = rng.pick(&[", ", " / ", ". "]);
-            builder.push_text(separator);
+            builder.push_text(rng.pick(SEGMENT_SEPARATORS));
         }
         if rng.chance(PII_RATIO) {
             let entity_type = *rng.pick(&EntityType::ALL);

@@ -96,6 +96,59 @@ pub(crate) fn has_digit_boundaries(text: &str, start: usize, end: usize) -> bool
     !preceded && !followed
 }
 
+/// Labels that, written immediately before a number, identify it as a business
+/// identifier rather than personal data.
+///
+/// Only compound labels are listed. Bare words such as "고객" (customer) or
+/// "회원" (member) are excluded on purpose: "고객 010-1234-5678" is a
+/// customer's phone number, not an identifier.
+const NON_PII_LABELS: &[&str] = &[
+    "주문번호",
+    "송장번호",
+    "운송장번호",
+    "운송장",
+    "회원번호",
+    "고객번호",
+    "상품번호",
+    "상품코드",
+    "접수번호",
+    "예약번호",
+    "결제번호",
+    "거래번호",
+    "승인번호",
+    "일련번호",
+    "모델번호",
+    "order id",
+    "order no",
+    "tracking no",
+    "invoice no",
+];
+
+/// Returns whether the number starting at `start` is labelled as a business
+/// identifier, as in "주문번호: 2026..." or "회원번호는 0420...".
+///
+/// The label must end directly before the number, allowing only whitespace,
+/// label punctuation, and a topic particle in between, so a label elsewhere in
+/// the sentence never suppresses an unrelated number.
+pub(crate) fn is_labeled_non_pii(text: &str, start: usize) -> bool {
+    let before = text[..start]
+        .trim_end_matches(|c: char| c.is_whitespace() || matches!(c, ':' | '：' | '#' | '=' | '.'));
+    let before = before
+        .strip_suffix('는')
+        .or_else(|| before.strip_suffix('은'))
+        .unwrap_or(before)
+        .trim_end();
+    NON_PII_LABELS
+        .iter()
+        .any(|label| ends_with_ignore_ascii_case(before, label))
+}
+
+fn ends_with_ignore_ascii_case(text: &str, suffix: &str) -> bool {
+    text.len() >= suffix.len()
+        && text.is_char_boundary(text.len() - suffix.len())
+        && text[text.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+}
+
 /// Returns the text of an optional capture group, or `""` if it did not participate.
 pub(crate) fn group<'t>(captures: &Captures<'t>, name: &str) -> &'t str {
     captures.name(name).map_or("", |m| m.as_str())
@@ -145,6 +198,31 @@ mod tests {
         let text = "번호010-1234-5678로";
         let start = text.find('0').unwrap();
         assert!(has_digit_boundaries(text, start, start + 13));
+    }
+
+    #[test]
+    fn labels_directly_before_a_number_mark_it_as_non_pii() {
+        for text in [
+            "주문번호 2026",
+            "주문번호: 2026",
+            "주문번호는 2026",
+            "송장번호 #2026",
+            "Order ID: 2026",
+        ] {
+            assert!(is_labeled_non_pii(text, text.len() - 4), "input: {text}");
+        }
+    }
+
+    #[test]
+    fn distant_or_bare_labels_do_not_suppress_numbers() {
+        for text in [
+            "주문번호 확인 후 연락처 2026", // Label does not precede the number
+            "고객 2026",                    // Bare word, not a compound label
+            "회원 2026",
+            "2026",
+        ] {
+            assert!(!is_labeled_non_pii(text, text.len() - 4), "input: {text}");
+        }
     }
 
     #[test]

@@ -6,10 +6,11 @@
 //! common criterion, so reported numbers are a lower bound.
 //!
 //! Before matching, every predicted span is trimmed of surrounding whitespace
-//! and brackets. Some tools report `(010-1234-5678` for a number written in
-//! parentheses; the number itself was found, so the adjacent punctuation should
-//! not turn a correct detection into an error. The rule applies identically to
-//! every system and leaves krpii's own spans unchanged.
+//! and of unbalanced brackets at its edges. Some tools report `(010-1234-5678`
+//! for a number written in parentheses; the number itself was found, so the
+//! stray punctuation should not turn a correct detection into an error.
+//! Balanced brackets that belong to the value, as in `(02) 123-4567`, are kept.
+//! The rule applies identically to every system.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -263,18 +264,33 @@ fn score_sample(sample: &Sample, predictions: &[Prediction], report: &mut Report
     }
 }
 
-/// Shrinks `prediction` past surrounding whitespace and brackets, or returns
-/// `None` if nothing else remains.
+/// Shrinks `prediction` past surrounding whitespace and unbalanced edge
+/// brackets, or returns `None` if nothing remains.
 fn trim_span(text: &str, prediction: Prediction) -> Option<Prediction> {
-    const PADDING: &[char] = &[' ', '\t', '\n', '(', ')', '[', ']', '{', '}', '<', '>'];
-    let value = &text[prediction.start..prediction.end];
-    let leading = value.len() - value.trim_start_matches(PADDING).len();
-    let trimmed = value.trim_matches(PADDING);
-    (!trimmed.is_empty()).then(|| Prediction {
-        start: prediction.start + leading,
-        end: prediction.start + leading + trimmed.len(),
-        ..prediction
-    })
+    const PAIRS: &[(char, char)] = &[('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')];
+    let (mut start, mut end) = (prediction.start, prediction.end);
+    loop {
+        let value = &text[start..end];
+        let first = value.chars().next()?;
+        let last = value.chars().next_back()?;
+        let stray_opener = PAIRS
+            .iter()
+            .any(|&(open, close)| first == open && !value.contains(close));
+        let stray_closer = PAIRS
+            .iter()
+            .any(|&(open, close)| last == close && !value.contains(open));
+        if first.is_whitespace() || stray_opener {
+            start += first.len_utf8();
+        } else if last.is_whitespace() || stray_closer {
+            end -= last.len_utf8();
+        } else {
+            return Some(Prediction {
+                start,
+                end,
+                ..prediction
+            });
+        }
+    }
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -334,7 +350,8 @@ mod tests {
 
     #[test]
     fn missed_entity_is_a_false_negative() {
-        let text = "(02) 123-4567";
+        // Spaces around each hyphen are not a supported notation.
+        let text = "010 - 1234 - 5678";
         let samples = [sample(
             text,
             vec![Span {
@@ -349,7 +366,8 @@ mod tests {
 
     #[test]
     fn detection_on_decoy_is_flagged() {
-        let text = "회원번호 1234567891";
+        // Unlabelled, so nothing distinguishes it from a business registration number.
+        let text = "참고 1234567891";
         let start = text.find('1').unwrap();
         let samples = [sample(
             text,
@@ -380,6 +398,23 @@ mod tests {
         );
         assert_eq!(report.other_false_positives, 1);
         assert_eq!(report.overall().false_positives, 1);
+    }
+
+    #[test]
+    fn balanced_brackets_that_belong_to_the_value_are_kept() {
+        let text = "연락처 (02) 123-4567";
+        let start = text.find('(').unwrap();
+        let samples = [sample(
+            text,
+            vec![Span {
+                label: Label::Pii(EntityType::Phone),
+                start,
+                end: text.len(),
+            }],
+        )];
+        let report = evaluate(krpii, &samples);
+        assert_eq!(report.per_type[&EntityType::Phone].true_positives, 1);
+        assert_eq!(report.per_type[&EntityType::Phone].false_positives, 0);
     }
 
     #[test]

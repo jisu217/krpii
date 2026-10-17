@@ -4,28 +4,29 @@ use std::sync::LazyLock;
 
 use regex::{Captures, Regex};
 
-use super::{MASK_CHAR, Recognizer, group, has_digit_boundaries};
+use super::{MASK_CHAR, Recognizer, group, has_digit_boundaries, is_labeled_non_pii};
 use crate::entity::EntityType;
 
-/// Matches the domestic trunk prefix `0` or the international prefix `+82`,
-/// followed by a subscriber area code. Service prefixes such as `1588` or
-/// `080` are intentionally excluded because they do not identify a person.
+/// Subscriber area codes that follow the trunk prefix `0`: mobile, Seoul,
+/// regional, and `VoIP`. Service prefixes such as `1588` or `080` are
+/// intentionally excluded because they do not identify a person.
+const AREA_CODES: &str = r"1[016789] | 2 | 3[1-3] | 4[1-4] | 5[1-5] | 6[1-4] | 70";
+
 static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
+    Regex::new(&format!(
         r"(?x)
-        (?: 0 | \+82[-.\ ]? )
-        (?P<area>
-            1[016789]                       # mobile
-          | 2                               # Seoul
-          | 3[1-3] | 4[1-4] | 5[1-5] | 6[1-4] # regional
-          | 70                              # VoIP
+        (?:
+            # Plain notation: 010-1234-5678, 02 123 4567, +82 10-1234-5678.
+            (?: 0 | \+82[-.\ ]? ) (?P<area> {AREA_CODES} ) (?P<sep1>[-.\ ]?)
+          |
+            # Parenthesized area code: (02) 123-4567, (031)123-4567.
+            \( 0 (?P<paren_area> {AREA_CODES} ) \) \ ?
         )
-        (?P<sep1>[-.\ ]?)
-        (?P<middle>[0-9]{3,4})
+        (?P<middle>[0-9]{{3,4}})
         (?P<sep2>[-.\ ]?)
-        (?P<last>[0-9]{4})
-        ",
-    )
+        (?P<last>[0-9]{{4}})
+        "
+    ))
     .expect("phone pattern is valid")
 });
 
@@ -36,7 +37,8 @@ const SCORE_LANDLINE: f64 = 0.85;
 const UNSEPARATED_PENALTY: f64 = 0.15;
 
 /// Detects mobile, landline, and `VoIP` numbers in common Korean notations,
-/// such as `010-1234-5678`, `02 123 4567`, `01012345678`, and `+82 10-1234-5678`.
+/// such as `010-1234-5678`, `02 123 4567`, `01012345678`, `+82 10-1234-5678`,
+/// and `(02) 123-4567`.
 pub(crate) struct PhoneRecognizer;
 
 impl Recognizer for PhoneRecognizer {
@@ -50,14 +52,22 @@ impl Recognizer for PhoneRecognizer {
 
     fn score(&self, text: &str, captures: &Captures<'_>) -> Option<f64> {
         let matched = captures.get(0)?;
-        if !has_digit_boundaries(text, matched.start(), matched.end()) {
+        if !has_digit_boundaries(text, matched.start(), matched.end())
+            || is_labeled_non_pii(text, matched.start())
+        {
             return None;
         }
-        let separator = group(captures, "sep1");
-        if separator != group(captures, "sep2") {
-            return None;
-        }
-        let area = group(captures, "area");
+        let parenthesized = captures.name("paren_area").is_some();
+        let area = if parenthesized {
+            group(captures, "paren_area")
+        } else {
+            // The parentheses already delimit the area code, so only the plain
+            // notation needs matching separators on both sides of the middle group.
+            if group(captures, "sep1") != group(captures, "sep2") {
+                return None;
+            }
+            group(captures, "area")
+        };
         // Current 010 numbers always carry a 4-digit middle group; only the
         // legacy 01[16789] prefixes may have three digits.
         if area == "10" && group(captures, "middle").len() != 4 {
@@ -68,7 +78,8 @@ impl Recognizer for PhoneRecognizer {
         } else {
             SCORE_LANDLINE
         };
-        Some(if separator.is_empty() {
+        let unseparated = !parenthesized && group(captures, "sep1").is_empty();
+        Some(if unseparated {
             base - UNSEPARATED_PENALTY
         } else {
             base
@@ -114,6 +125,10 @@ mod tests {
             "070-1234-5678",
             "+82 10-1234-5678",
             "+82-2-1234-5678",
+            "(02) 123-4567",
+            "(02) 1234-5678",
+            "(031)123-4567",
+            "(010) 1234-5678",
         ] {
             let text = format!("연락처: {number}로 연락 주세요");
             assert_eq!(found(&text), [number], "input: {text}");
@@ -129,7 +144,16 @@ mod tests {
             "080-123-4567",   // Toll-free prefix
             "010-1234-56789", // Part of a longer digit run
             "9010-1234-5678", // Part of a longer digit run
+            "(080) 123-4567", // Toll-free prefix in parentheses
+            "(010) 123-4567", // Parenthesized 010 with a 3-digit middle group
         ] {
+            assert!(found(text).is_empty(), "input: {text}");
+        }
+    }
+
+    #[test]
+    fn rejects_numbers_labelled_as_business_identifiers() {
+        for text in ["회원번호 0420764465", "주문번호: 01012345678"] {
             assert!(found(text).is_empty(), "input: {text}");
         }
     }
@@ -148,6 +172,7 @@ mod tests {
             ("01012345678", "010****5678"),
             ("02-123-4567", "02-***-4567"),
             ("+82 10-1234-5678", "+82 10-****-5678"),
+            ("(02) 123-4567", "(02) ***-4567"),
         ] {
             assert_eq!(PhoneRecognizer.mask_partial(value), expected);
         }

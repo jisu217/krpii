@@ -72,7 +72,7 @@ fn scan_exits_zero_when_no_pii_is_found() {
 
 #[test]
 fn unknown_type_is_a_usage_error() {
-    let output = run(&["scan", "--types", "passport"], "");
+    let output = run(&["scan", "--types", "address"], "");
     assert_eq!(output.status.code(), Some(2));
 }
 

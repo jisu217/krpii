@@ -39,8 +39,8 @@ LANGUAGE = "ko"
 SPACY_MODEL = "ko_core_news_sm"
 
 # Presidio entity -> krpii entity label. krpii's RRN covers foreigners, so
-# KR_FRN maps to it as well. Unmapped types (driver licences, passports) are
-# passed through and scored as types krpii does not support.
+# KR_FRN maps to it as well. Any unmapped type is passed through and scored as
+# a type krpii does not support.
 ENTITY_MAP = {
     "PHONE_NUMBER": "PHONE",
     "EMAIL_ADDRESS": "EMAIL",
@@ -48,6 +48,8 @@ ENTITY_MAP = {
     "KR_RRN": "RRN",
     "KR_FRN": "RRN",
     "KR_BRN": "BRN",
+    "KR_PASSPORT": "PASSPORT",
+    "KR_DRIVER_LICENSE": "DRIVER_LICENSE",
 }
 
 
@@ -61,12 +63,15 @@ def build_analyzer() -> AnalyzerEngine:
     ).create_engine()
 
     registry = RecognizerRegistry(supported_languages=[LANGUAGE])
+    # The language is passed explicitly because the defaults differ: the
+    # passport recognizer defaults to "kr" while the others default to "ko",
+    # and a recognizer whose language does not match the analyzer never runs.
     for recognizer in (
-        KrRrnRecognizer(),
-        KrFrnRecognizer(),
-        KrBrnRecognizer(),
-        KrDriverLicenseRecognizer(),
-        KrPassportRecognizer(),
+        KrRrnRecognizer(supported_language=LANGUAGE),
+        KrFrnRecognizer(supported_language=LANGUAGE),
+        KrBrnRecognizer(supported_language=LANGUAGE),
+        KrDriverLicenseRecognizer(supported_language=LANGUAGE),
+        KrPassportRecognizer(supported_language=LANGUAGE),
         CreditCardRecognizer(supported_language=LANGUAGE),
         EmailRecognizer(supported_language=LANGUAGE),
         PhoneRecognizer(supported_language=LANGUAGE, supported_regions=("KR",)),

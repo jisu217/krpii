@@ -12,7 +12,9 @@
 
 mod brn;
 mod card;
+mod driver_license;
 mod email;
+mod passport;
 mod phone;
 mod rrn;
 mod secret;
@@ -90,6 +92,8 @@ pub(crate) fn recognizer_for(entity_type: EntityType) -> &'static dyn Recognizer
         EntityType::Card => &card::CardRecognizer,
         EntityType::Rrn => &rrn::ResidentRegistrationNumberRecognizer,
         EntityType::Brn => &brn::BusinessRegistrationNumberRecognizer,
+        EntityType::Passport => &passport::PassportRecognizer,
+        EntityType::DriverLicense => &driver_license::DriverLicenseRecognizer,
         EntityType::Secret => &secret::SecretRecognizer,
     }
 }
@@ -138,6 +142,11 @@ const NON_PII_LABELS: &[&str] = &[
     "승인번호",
     "일련번호",
     "모델번호",
+    "시리얼번호",
+    "시리얼",
+    "serial no",
+    "serial",
+    "s/n",
     "order id",
     "order no",
     "tracking no",
@@ -161,6 +170,56 @@ pub(crate) fn is_labeled_non_pii(text: &str, start: usize) -> bool {
     NON_PII_LABELS
         .iter()
         .any(|label| ends_with_ignore_ascii_case(before, label))
+}
+
+/// How many characters before an entity are searched for a context keyword.
+/// Wide enough for "운전면허번호: " or "Passport No. " plus a little prose,
+/// narrow enough that a keyword from an unrelated clause rarely reaches.
+const CONTEXT_WINDOW_CHARS: usize = 24;
+
+/// Returns whether one of `keywords` appears in the text shortly before `start`
+/// within the same clause, compared case-insensitively for ASCII.
+///
+/// Used where a number's shape alone is ambiguous, such as a passport number
+/// in the previous format, which also looks like a product serial. The search
+/// stops at the nearest clause boundary so that a keyword belonging to an
+/// earlier value ("여권번호: D318T4516. 시리얼 R73410091") does not vouch for
+/// a later one.
+pub(crate) fn preceded_by_keyword(text: &str, start: usize, keywords: &[&str]) -> bool {
+    let window_start = text[..start]
+        .char_indices()
+        .rev()
+        .take(CONTEXT_WINDOW_CHARS)
+        .find(|&(i, c)| is_clause_boundary(text, i, c))
+        .map_or_else(
+            || {
+                text[..start]
+                    .char_indices()
+                    .rev()
+                    .nth(CONTEXT_WINDOW_CHARS - 1)
+                    .map_or(0, |(i, _)| i)
+            },
+            |(i, c)| i + c.len_utf8(),
+        );
+    let window = text[window_start..start].to_ascii_lowercase();
+    keywords
+        .iter()
+        .any(|keyword| window.contains(&keyword.to_ascii_lowercase()))
+}
+
+/// Returns whether the character `c` at byte offset `index` ends a clause.
+/// A period counts only before whitespace and not in the abbreviation "No.",
+/// as in "Passport No. R12345678".
+fn is_clause_boundary(text: &str, index: usize, c: char) -> bool {
+    match c {
+        '\n' | ',' | ';' | '/' | '|' | '(' | ')' => true,
+        '.' => {
+            let followed_by_space = text[index + 1..].starts_with(char::is_whitespace);
+            let abbreviation = ends_with_ignore_ascii_case(&text[..index], "no");
+            followed_by_space && !abbreviation
+        }
+        _ => false,
+    }
 }
 
 fn ends_with_ignore_ascii_case(text: &str, suffix: &str) -> bool {
@@ -230,6 +289,25 @@ mod tests {
             "Order ID: 2026",
         ] {
             assert!(is_labeled_non_pii(text, text.len() - 4), "input: {text}");
+        }
+    }
+
+    #[test]
+    fn keywords_do_not_reach_across_clause_boundaries() {
+        let keywords = ["여권", "passport"];
+        for (text, expected) in [
+            ("여권번호: M12345678", true),
+            ("Passport No. M12345678", true),
+            ("여권번호: D318T4516. 시리얼 M12345678", false),
+            ("여권 R09650316 확인 완료, M12345678", false),
+            ("여권 D17679474 확인 완료 / M12345678", false),
+        ] {
+            let start = text.rfind('M').unwrap();
+            assert_eq!(
+                preceded_by_keyword(text, start, &keywords),
+                expected,
+                "input: {text}"
+            );
         }
     }
 

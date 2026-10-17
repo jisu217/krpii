@@ -50,6 +50,23 @@ const SECRET_FRAMES: &[(&str, &str)] = &[
     ("", ""),
 ];
 
+/// Frames that name the document a passport or licence number belongs to.
+const PASSPORT_FRAMES: &[(&str, &str)] = &[
+    ("여권번호: ", ""),
+    ("Passport No. ", ""),
+    ("여권 ", " 확인 완료"),
+];
+const DRIVER_LICENSE_FRAMES: &[(&str, &str)] = &[
+    ("운전면허번호 ", ""),
+    ("면허번호: ", ""),
+    ("Driver license ", ""),
+];
+
+/// Share of passport and licence numbers framed with a document keyword. The
+/// rest use generic frames, so formats that krpii reports only with a keyword
+/// count as misses there instead of being hidden from the benchmark.
+const DOCUMENT_KEYWORD_RATIO: f64 = 0.7;
+
 /// Share of credentials generated as a connection-string password rather than
 /// a token or private key.
 const DB_PASSWORD_RATIO: f64 = 0.25;
@@ -68,6 +85,7 @@ fn decoy_frame(kind: DecoyKind) -> (&'static str, &'static str) {
         DecoyKind::IpAddress => ("접속 IP ", ""),
         DecoyKind::CommitHash => ("커밋 ", " 기준으로 배포"),
         DecoyKind::Uuid => ("request_id=", ""),
+        DecoyKind::SerialNumber => ("시리얼 ", ""),
         DecoyKind::PlaceholderKey => ("예시: ", ""),
     }
 }
@@ -102,7 +120,14 @@ fn sample(rng: &mut Rng) -> Sample {
         if rng.chance(PII_RATIO) {
             let entity_type = *rng.pick(&EntityType::ALL);
             let (prefix, value, suffix) = if entity_type != EntityType::Secret {
-                let (prefix, suffix) = *rng.pick(PII_FRAMES);
+                let frames = match entity_type {
+                    EntityType::Passport if rng.chance(DOCUMENT_KEYWORD_RATIO) => PASSPORT_FRAMES,
+                    EntityType::DriverLicense if rng.chance(DOCUMENT_KEYWORD_RATIO) => {
+                        DRIVER_LICENSE_FRAMES
+                    }
+                    _ => PII_FRAMES,
+                };
+                let (prefix, suffix) = *rng.pick(frames);
                 (prefix, generators::entity(rng, entity_type), suffix)
             } else if rng.chance(DB_PASSWORD_RATIO) {
                 // Only the password is sensitive, so the URL around it is the frame.

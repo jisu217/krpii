@@ -107,3 +107,66 @@ fn usage_errors_do_not_depend_on_reading_input() {
     let output = run(&["scan", "--min-score", "1.5"], &large_input);
     assert_eq!(output.status.code(), Some(2));
 }
+
+/// Writes `contents` to a file under Cargo's per-test temporary directory.
+fn temp_file(name: &str, contents: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    std::fs::write(&path, contents).expect("failed to write temp file");
+    path
+}
+
+fn read_event(path: &std::path::Path) -> String {
+    format!(
+        r#"{{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{{"file_path":{}}}}}"#,
+        serde_json_string(&path.to_string_lossy())
+    )
+}
+
+fn serde_json_string(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+#[test]
+fn hook_blocks_a_prompt_containing_pii() {
+    let event = r#"{"hook_event_name":"UserPromptSubmit","prompt":"고객 010-1234-5678 환불"}"#;
+    let output = run(&["hook"], event);
+    assert_eq!(output.status.code(), Some(0));
+    let out = stdout(&output);
+    assert!(out.contains(r#""decision":"block""#), "stdout: {out}");
+    assert!(
+        out.contains(r#""suppressOriginalPrompt":true"#),
+        "stdout: {out}"
+    );
+    assert!(
+        !out.contains("1234"),
+        "the decision must not echo the value"
+    );
+}
+
+#[test]
+fn hook_denies_reading_a_file_with_pii() {
+    let path = temp_file("hook-pii.log", "user=hong phone=010-1234-5678\n");
+    let output = run(&["hook"], &read_event(&path));
+    assert_eq!(output.status.code(), Some(0));
+    let out = stdout(&output);
+    assert!(
+        out.contains(r#""permissionDecision":"deny""#),
+        "stdout: {out}"
+    );
+    assert!(out.contains("krpii mask --style tag"), "stdout: {out}");
+}
+
+#[test]
+fn hook_allows_reading_a_file_without_pii() {
+    let path = temp_file("hook-clean.log", "build finished in 3.2s\n");
+    let output = run(&["hook"], &read_event(&path));
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout(&output), "");
+}
+
+#[test]
+fn hook_errors_do_not_block() {
+    // Exit code 2 would make Claude Code block the prompt or tool call.
+    let output = run(&["hook"], "not json");
+    assert_eq!(output.status.code(), Some(1));
+}

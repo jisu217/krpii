@@ -9,6 +9,10 @@
 //! | 1    | `scan` only: at least one entity was found     |
 //! | 2    | Usage or I/O error                             |
 //!
+//! `krpii hook` is the exception: it always exits 0 and reports decisions as
+//! JSON, and it exits 1 on errors because Claude Code treats exit code 2 as a
+//! request to block the prompt or tool call.
+//!
 //! When PII is found and standard error is a terminal, a one-line summary such
 //! as `krpii: masked 2 values (1 PHONE, 1 RRN)` is written to standard error.
 //! It never reaches standard output, so redirected or piped results stay clean,
@@ -24,6 +28,8 @@ use clap::{Args, Parser, Subcommand};
 use krpii_core::{Detector, Entity, EntityType, MaskStyle, apply_mask};
 use serde::Serialize;
 
+mod hook;
+
 /// Detect and mask Korean personally identifiable information.
 #[derive(Debug, Parser)]
 #[command(name = "krpii", version, about, long_about = None)]
@@ -38,6 +44,9 @@ enum Command {
     Scan(ScanArgs),
     /// Print the input with every detected entity masked.
     Mask(MaskArgs),
+    /// Run as a Claude Code hook: read an event as JSON on standard input and
+    /// print a decision when it carries PII.
+    Hook,
 }
 
 /// Options shared by every subcommand that runs detection.
@@ -100,11 +109,18 @@ impl From<&Entity> for EntityRecord {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // Claude Code blocks on exit code 2, so a failing hook must not use it:
+    // exit code 1 surfaces the error without blocking the user's work.
+    let failure = if matches!(cli.command, Command::Hook) {
+        1
+    } else {
+        2
+    };
     match run(cli.command) {
         Ok(code) => code,
         Err(error) => {
             eprintln!("krpii: {error:#}");
-            ExitCode::from(2)
+            ExitCode::from(failure)
         }
     }
 }
@@ -113,7 +129,19 @@ fn run(command: Command) -> Result<ExitCode> {
     match command {
         Command::Scan(args) => scan(&args),
         Command::Mask(args) => mask(&args),
+        Command::Hook => run_hook(),
     }
+}
+
+fn run_hook() -> Result<ExitCode> {
+    let mut input = String::new();
+    io::stdin()
+        .read_to_string(&mut input)
+        .context("failed to read the hook event")?;
+    if let Some(decision) = hook::decide(&input)? {
+        println!("{decision}");
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn scan(args: &ScanArgs) -> Result<ExitCode> {
@@ -170,9 +198,12 @@ fn report_summary(args: &DetectionArgs, verb: &str, entities: &[Entity]) {
 /// Formats a summary such as `krpii: masked 2 values (1 PHONE, 1 RRN)`, or
 /// returns `None` when nothing was found.
 fn summary(verb: &str, entities: &[Entity]) -> Option<String> {
-    if entities.is_empty() {
-        return None;
-    }
+    (!entities.is_empty()).then(|| format!("krpii: {verb} {}", describe(entities)))
+}
+
+/// Describes detected entities without their values, such as
+/// `2 values (1 PHONE, 1 RRN)`.
+fn describe(entities: &[Entity]) -> String {
     let breakdown: Vec<String> = EntityType::ALL
         .into_iter()
         .filter_map(|entity_type| {
@@ -188,11 +219,7 @@ fn summary(verb: &str, entities: &[Entity]) -> Option<String> {
     } else {
         "values"
     };
-    Some(format!(
-        "krpii: {verb} {} {noun} ({})",
-        entities.len(),
-        breakdown.join(", ")
-    ))
+    format!("{} {noun} ({})", entities.len(), breakdown.join(", "))
 }
 
 /// Parses a confidence threshold, rejecting values that no score can satisfy

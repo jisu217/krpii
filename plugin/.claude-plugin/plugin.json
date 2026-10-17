@@ -1,0 +1,13 @@
+{
+  "name": "krpii",
+  "version": "0.1.0",
+  "description": "Blocks prompts and file reads that contain Korean PII before they reach Claude.",
+  "author": {
+    "name": "jisu217",
+    "url": "https://github.com/jisu217"
+  },
+  "homepage": "https://github.com/jisu217/krpii",
+  "repository": "https://github.com/jisu217/krpii",
+  "license": "MIT",
+  "keywords": ["pii", "privacy", "korean", "security"]
+}

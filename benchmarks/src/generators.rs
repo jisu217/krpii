@@ -36,13 +36,15 @@ pub enum DecoyKind {
     CommitHash,
     /// Random UUID, as found in request IDs.
     Uuid,
+    /// Product serial shaped like a previous-format passport number.
+    SerialNumber,
     /// Credential placeholder copied from documentation, such as
     /// `AKIAIOSFODNN7EXAMPLE` or `postgres://app:password@localhost/app`.
     PlaceholderKey,
 }
 
 impl DecoyKind {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::OrderId,
         Self::TrackingNumber,
         Self::MemberId,
@@ -54,6 +56,7 @@ impl DecoyKind {
         Self::IpAddress,
         Self::CommitHash,
         Self::Uuid,
+        Self::SerialNumber,
         Self::PlaceholderKey,
     ];
 
@@ -70,6 +73,7 @@ impl DecoyKind {
             Self::IpAddress => "IPv4 address",
             Self::CommitHash => "Commit hash",
             Self::Uuid => "UUID",
+            Self::SerialNumber => "Product serial (letter + 8 digits)",
             Self::PlaceholderKey => "Documentation placeholder key",
         }
     }
@@ -83,6 +87,8 @@ pub fn entity(rng: &mut Rng, entity_type: EntityType) -> String {
         EntityType::Card => card(rng),
         EntityType::Rrn => rrn(rng),
         EntityType::Brn => brn(rng),
+        EntityType::Passport => passport(rng),
+        EntityType::DriverLicense => driver_license(rng),
         EntityType::Secret => secret(rng),
     }
 }
@@ -135,6 +141,9 @@ pub fn decoy(rng: &mut Rng, kind: DecoyKind) -> String {
             random_chars(rng, HEX, 4),
             random_chars(rng, HEX, 12)
         ),
+        DecoyKind::SerialNumber => {
+            format!("{}{}", rng.pick(&['M', 'S', 'R', 'O', 'D']), rng.digits(8))
+        }
         DecoyKind::PlaceholderKey => (*rng.pick(&[
             "AKIAIOSFODNN7EXAMPLE",
             "sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -157,6 +166,40 @@ fn random_chars(rng: &mut Rng, charset: &[u8], length: usize) -> String {
     (0..length)
         .map(|_| char::from(*rng.pick(charset)))
         .collect()
+}
+
+/// Generates a passport number: 60% in the current format (`M123A4567`) and
+/// the rest in the previous format (`M12345678`).
+fn passport(rng: &mut Rng) -> String {
+    let kind = *rng.pick(&['M', 'M', 'M', 'S', 'R', 'O', 'D']);
+    if rng.chance(0.6) {
+        let letter = char::from(*rng.pick(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ"));
+        format!("{kind}{}{letter}{}", rng.digits(3), rng.digits(4))
+    } else {
+        format!("{kind}{}", rng.digits(8))
+    }
+}
+
+/// Generates a driver's licence number: grouped with a region code, grouped
+/// with a region name as on older licences, or as 12 unseparated digits.
+fn driver_license(rng: &mut Rng) -> String {
+    const CODES: &[&str] = &[
+        "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25",
+        "26", "28",
+    ];
+    const NAMES: &[&str] = &[
+        "서울", "부산", "경기", "대구", "인천", "광주", "대전", "제주",
+    ];
+    let (year, serial, check) = (rng.digits(2), rng.digits(6), rng.digits(2));
+    match rng.below(100) {
+        0..=69 => {
+            let separator = *rng.pick(&["-", "-", " "]);
+            let code = rng.pick(CODES);
+            format!("{code}{separator}{year}{separator}{serial}{separator}{check}")
+        }
+        70..=84 => format!("{} {year}-{serial}-{check}", rng.pick(NAMES)),
+        _ => format!("{}{year}{serial}{check}", rng.pick(CODES)),
+    }
 }
 
 /// Generates a synthetic API key, token, or private key block. Bodies are

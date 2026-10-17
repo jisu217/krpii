@@ -30,7 +30,8 @@ Building from source requires Rust 1.85+.
   passwords in database URLs, and ignores documentation placeholders.
 
 Supports Korean phone numbers, email addresses, payment cards, resident registration numbers,
-business registration numbers, and credentials with fixed-prefix formats.
+business registration numbers, passport numbers, driver's licence numbers, and credentials with
+fixed-prefix formats.
 
 ### CLI & library
 
@@ -52,12 +53,12 @@ Omit the file or use `-` to read stdin. For Rust applications, install the libra
 
 | System | PII F1 | Decoys flagged | Per invocation | Install size |
 |---|--:|--:|--:|--:|
-| Regex-only baseline | 0.930 | 27.3% | — | — |
-| Presidio 2.2.364 | 0.866 | 11.0% | 1,093 ms | 176.3 MiB |
-| krpii | 0.998 | 0.5% | 5 ms | 1.9 MiB |
+| Regex-only baseline | 0.908 | 33.8% | — | — |
+| Presidio 2.2.364 | 0.857 | 17.3% | 1,525 ms | 176.3 MiB |
+| krpii | 0.986 | 0.5% | 8 ms | 1.9 MiB |
 
-PII F1 covers the five Korean PII types. Credentials are scored separately because Presidio has no
-credential recognizers: krpii reaches F1 1.000 on 1,948 synthetic keys, tokens, private keys, and
+PII F1 covers the seven Korean PII types. Credentials are scored separately because Presidio has no
+credential recognizers: krpii reaches F1 1.000 on 1,594 synthetic keys, tokens, private keys, and
 connection-string passwords, and flags none of the documentation placeholder keys.
 
 Per-invocation cost is the median of 10 fresh processes scanning one sentence on Apple Silicon,
@@ -80,7 +81,10 @@ boundary against data exposure.
 
 Names, addresses, and unsupported formats remain unchanged; context labels can suppress valid
 matches. Credential detection covers fixed-prefix formats only, so generic passwords and
-unprefixed keys are not detected. Partial masking retains identifying information. Tag mode removes detected values
+unprefixed keys are not detected. Previous-format passport numbers and unseparated licence numbers
+are reported only after a keyword such as 여권 or 운전면허, because without one they are
+indistinguishable from serials and tracking numbers; Presidio recalls more of them at the cost of
+flagging those look-alikes. Partial masking retains identifying information. Tag mode removes detected values
 entirely, while undetected text remains unchanged in both modes.
 
 [MIT License](LICENSE)

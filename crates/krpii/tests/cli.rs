@@ -70,3 +70,25 @@ fn unknown_type_is_a_usage_error() {
     let output = run(&["scan", "--types", "passport"], "");
     assert_eq!(output.status.code(), Some(2));
 }
+
+#[test]
+fn summary_is_not_written_when_stderr_is_not_a_terminal() {
+    // Tests capture stderr through a pipe, as an editor hook or script would.
+    let output = run(&["mask"], SAMPLE);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn quiet_flag_is_accepted() {
+    let output = run(&["scan", "--quiet"], SAMPLE);
+    assert_eq!(output.status.code(), Some(1));
+}
+
+#[test]
+fn invalid_min_score_is_a_usage_error() {
+    for value in ["1.5", "-0.1", "NaN", "high"] {
+        let output = run(&["scan", "--min-score", value], SAMPLE);
+        assert_eq!(output.status.code(), Some(2), "value: {value}");
+    }
+}

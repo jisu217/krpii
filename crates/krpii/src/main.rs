@@ -8,15 +8,20 @@
 //! | 0    | Success (`scan`: no PII found)                 |
 //! | 1    | `scan` only: at least one entity was found     |
 //! | 2    | Usage or I/O error                             |
+//!
+//! When PII is found and standard error is a terminal, a one-line summary such
+//! as `krpii: masked 2 values (1 PHONE, 1 RRN)` is written to standard error.
+//! It never reaches standard output, so redirected or piped results stay clean,
+//! and it is omitted entirely when the caller is another program.
 
 use std::fs;
-use std::io::{self, BufWriter, Read, Write};
+use std::io::{self, BufWriter, IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use krpii_core::{Detector, Entity, EntityType, MaskStyle};
+use krpii_core::{Detector, Entity, EntityType, MaskStyle, apply_mask};
 use serde::Serialize;
 
 /// Detect and mask Korean personally identifiable information.
@@ -45,9 +50,13 @@ struct DetectionArgs {
     #[arg(long, short, value_delimiter = ',', value_name = "TYPES")]
     types: Vec<EntityType>,
 
-    /// Ignore entities whose confidence is below this threshold.
-    #[arg(long, default_value_t = 0.0, value_name = "SCORE")]
+    /// Ignore entities whose confidence is below this threshold, from 0 to 1.
+    #[arg(long, default_value_t = 0.0, value_name = "SCORE", value_parser = parse_score)]
     min_score: f64,
+
+    /// Do not print the summary line in an interactive terminal.
+    #[arg(long, short)]
+    quiet: bool,
 }
 
 #[derive(Debug, Args)]
@@ -117,6 +126,7 @@ fn scan(args: &ScanArgs) -> Result<ExitCode> {
         out.write_all(b"\n")?;
     }
     out.flush()?;
+    report_summary(&args.detection, "found", &entities);
 
     Ok(if entities.is_empty() {
         ExitCode::SUCCESS
@@ -127,12 +137,75 @@ fn scan(args: &ScanArgs) -> Result<ExitCode> {
 
 fn mask(args: &MaskArgs) -> Result<ExitCode> {
     let text = read_input(args.detection.input.as_ref())?;
-    let masked = build_detector(&args.detection).mask(&text, args.style);
+    let entities = build_detector(&args.detection).detect(&text);
+    let masked = apply_mask(&text, &entities, args.style);
 
     let mut out = io::stdout().lock();
     out.write_all(masked.as_bytes())?;
     out.flush()?;
+    report_summary(&args.detection, "masked", &entities);
     Ok(ExitCode::SUCCESS)
+}
+
+/// Writes the summary line to standard error when a person is watching.
+fn report_summary(args: &DetectionArgs, verb: &str, entities: &[Entity]) {
+    let stderr = io::stderr();
+    if args.quiet || !stderr.is_terminal() {
+        return;
+    }
+    let Some(line) = summary(verb, entities) else {
+        return;
+    };
+    // Dimmed so the summary reads as secondary to the output itself; the
+    // NO_COLOR convention (https://no-color.org) disables the styling.
+    let colored = std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty());
+    let mut stderr = stderr.lock();
+    let _ = if colored {
+        writeln!(stderr, "\x1b[2m{line}\x1b[0m")
+    } else {
+        writeln!(stderr, "{line}")
+    };
+}
+
+/// Formats a summary such as `krpii: masked 2 values (1 PHONE, 1 RRN)`, or
+/// returns `None` when nothing was found.
+fn summary(verb: &str, entities: &[Entity]) -> Option<String> {
+    if entities.is_empty() {
+        return None;
+    }
+    let breakdown: Vec<String> = EntityType::ALL
+        .into_iter()
+        .filter_map(|entity_type| {
+            let count = entities
+                .iter()
+                .filter(|e| e.entity_type == entity_type)
+                .count();
+            (count > 0).then(|| format!("{count} {entity_type}"))
+        })
+        .collect();
+    let noun = if entities.len() == 1 {
+        "value"
+    } else {
+        "values"
+    };
+    Some(format!(
+        "krpii: {verb} {} {noun} ({})",
+        entities.len(),
+        breakdown.join(", ")
+    ))
+}
+
+/// Parses a confidence threshold, rejecting values that no score can satisfy
+/// or compare against, such as `1.5` or `NaN`.
+fn parse_score(value: &str) -> Result<f64, String> {
+    let score: f64 = value
+        .parse()
+        .map_err(|_| format!("{value:?} is not a number"))?;
+    if (0.0..=1.0).contains(&score) {
+        Ok(score)
+    } else {
+        Err(format!("{value} is outside the range 0 to 1"))
+    }
 }
 
 fn build_detector(args: &DetectionArgs) -> Detector {
@@ -156,5 +229,45 @@ fn read_input(path: Option<&PathBuf>) -> Result<String> {
                 .context("failed to read standard input")?;
             Ok(text)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entity(entity_type: EntityType) -> Entity {
+        Entity {
+            entity_type,
+            start: 0,
+            end: 1,
+            score: 1.0,
+        }
+    }
+
+    #[test]
+    fn summary_is_absent_when_nothing_was_found() {
+        assert_eq!(summary("masked", &[]), None);
+    }
+
+    #[test]
+    fn summary_uses_singular_for_one_value() {
+        assert_eq!(
+            summary("found", &[entity(EntityType::Phone)]).as_deref(),
+            Some("krpii: found 1 value (1 PHONE)")
+        );
+    }
+
+    #[test]
+    fn summary_breaks_down_types_in_canonical_order() {
+        let entities = [
+            entity(EntityType::Rrn),
+            entity(EntityType::Phone),
+            entity(EntityType::Phone),
+        ];
+        assert_eq!(
+            summary("masked", &entities).as_deref(),
+            Some("krpii: masked 3 values (2 PHONE, 1 RRN)")
+        );
     }
 }

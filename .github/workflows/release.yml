@@ -2,10 +2,20 @@ name: Release
 
 # Builds the krpii binary for every supported platform and publishes the
 # archives to a GitHub Release when a version tag such as v0.1.0 is pushed.
-# Publishing to crates.io is a separate, manual step (see RELEASING.md).
+# Release notes are generated from the merged pull request titles.
 #
 # Running the workflow manually builds and uploads the archives as workflow
 # artifacts without creating a release, which tests the pipeline before tagging.
+#
+# Release checklist (a version published to crates.io can never be replaced):
+#
+#   1. Bump the version in the root Cargo.toml, in both [workspace.package]
+#      and the krpii-core entry of [workspace.dependencies], and merge.
+#   2. Optionally run this workflow manually to dry-run the builds.
+#   3. From an up-to-date main, publish the crates; krpii-core goes first:
+#        cargo publish --workspace --dry-run && cargo publish --workspace
+#   4. Tag and push, which triggers this workflow:
+#        git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
 
 on:
   push:

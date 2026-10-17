@@ -1,5 +1,7 @@
 //! Entity detection: run recognizers and resolve overlapping candidates.
 
+use std::collections::BTreeMap;
+
 use crate::entity::{Entity, EntityType};
 use crate::masking::{MaskStyle, apply_mask};
 use crate::recognizers::recognizer_for;
@@ -41,9 +43,17 @@ impl Detector {
     }
 
     /// Discards entities whose confidence is below `min_score`.
+    ///
+    /// Scores lie in `[0.0, 1.0]`, so out-of-range values are clamped. `NaN`
+    /// is treated as `0.0` (no threshold) instead of silently discarding every
+    /// entity.
     #[must_use]
     pub fn with_min_score(mut self, min_score: f64) -> Self {
-        self.min_score = min_score;
+        self.min_score = if min_score.is_nan() {
+            0.0
+        } else {
+            min_score.clamp(0.0, 1.0)
+        };
         self
     }
 
@@ -77,6 +87,11 @@ pub fn detect(text: &str) -> Vec<Entity> {
 /// Candidates are ranked by score, then span length, then position, and
 /// accepted greedily. For instance, `0212345678` matches both the phone and
 /// business-number patterns; the higher-confidence interpretation wins.
+///
+/// Accepted spans are kept in a map ordered by start offset. Because they never
+/// overlap, their end offsets increase with their starts, so a candidate can
+/// only collide with the last accepted span that starts before the candidate
+/// ends. Each check is therefore a single `O(log n)` lookup.
 fn resolve_overlaps(mut candidates: Vec<Entity>) -> Vec<Entity> {
     candidates.sort_by(|a, b| {
         b.score
@@ -84,14 +99,17 @@ fn resolve_overlaps(mut candidates: Vec<Entity>) -> Vec<Entity> {
             .then_with(|| b.len().cmp(&a.len()))
             .then_with(|| a.start.cmp(&b.start))
     });
-    let mut accepted: Vec<Entity> = Vec::with_capacity(candidates.len());
+    let mut accepted: BTreeMap<usize, Entity> = BTreeMap::new();
     for candidate in candidates {
-        if !accepted.iter().any(|kept| kept.overlaps(&candidate)) {
-            accepted.push(candidate);
+        let collides = accepted
+            .range(..candidate.end)
+            .next_back()
+            .is_some_and(|(_, kept)| kept.end > candidate.start);
+        if !collides {
+            accepted.insert(candidate.start, candidate);
         }
     }
-    accepted.sort_by_key(|entity| entity.start);
-    accepted
+    accepted.into_values().collect()
 }
 
 #[cfg(test)]
@@ -136,5 +154,44 @@ mod tests {
         let entities = detect("123-45-67891");
         assert_eq!(entities.len(), 1);
         assert_eq!(entities[0].entity_type, EntityType::Brn);
+    }
+
+    fn span(start: usize, end: usize, score: f64) -> Entity {
+        Entity {
+            entity_type: EntityType::Phone,
+            start,
+            end,
+            score,
+        }
+    }
+
+    #[test]
+    fn resolve_overlaps_keeps_adjacent_spans_and_drops_overlapping_ones() {
+        let kept = resolve_overlaps(vec![
+            span(0, 5, 0.9),
+            span(5, 10, 0.8),  // Touches the first span without overlapping
+            span(3, 7, 0.7),   // Overlaps both
+            span(8, 20, 0.6),  // Overlaps the second
+            span(20, 25, 0.5), // Touches the previous candidate, which was dropped
+        ]);
+        let spans: Vec<(usize, usize)> = kept.iter().map(|e| (e.start, e.end)).collect();
+        assert_eq!(spans, [(0, 5), (5, 10), (20, 25)]);
+    }
+
+    #[test]
+    fn resolve_overlaps_rejects_a_candidate_spanning_several_accepted_spans() {
+        let kept = resolve_overlaps(vec![span(10, 12, 0.9), span(20, 22, 0.9), span(0, 30, 0.1)]);
+        assert_eq!(kept.len(), 2);
+    }
+
+    #[test]
+    fn min_score_is_clamped_and_nan_disables_the_threshold() {
+        let text = "010-1234-5678";
+        assert_eq!(
+            Detector::new().with_min_score(f64::NAN).detect(text).len(),
+            1
+        );
+        assert_eq!(Detector::new().with_min_score(-3.0).detect(text).len(), 1);
+        assert_eq!(Detector::new().with_min_score(7.0).detect(text), []);
     }
 }

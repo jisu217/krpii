@@ -1,6 +1,6 @@
 //! End-to-end tests that execute the compiled `krpii` binary.
 
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::process::{Command, Output, Stdio};
 
 const SAMPLE: &str = "홍길동 010-1234-5678, 주민번호 900101-1234567로 가입\n";
@@ -13,12 +13,17 @@ fn run(args: &[&str], stdin: &str) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to spawn krpii");
-    child
-        .stdin
-        .take()
-        .expect("stdin is piped")
-        .write_all(stdin.as_bytes())
-        .expect("failed to write stdin");
+    let mut pipe = child.stdin.take().expect("stdin is piped");
+    // On a usage error the binary exits without reading its input, so writing
+    // may hit a closed pipe. That is expected; any other failure is not.
+    if let Err(error) = pipe.write_all(stdin.as_bytes()) {
+        assert_eq!(
+            error.kind(),
+            ErrorKind::BrokenPipe,
+            "failed to write stdin: {error}"
+        );
+    }
+    drop(pipe);
     child.wait_with_output().expect("failed to wait for krpii")
 }
 
@@ -91,4 +96,14 @@ fn invalid_min_score_is_a_usage_error() {
         let output = run(&["scan", "--min-score", value], SAMPLE);
         assert_eq!(output.status.code(), Some(2), "value: {value}");
     }
+}
+
+#[test]
+fn usage_errors_do_not_depend_on_reading_input() {
+    // The binary rejects the argument before reading standard input. A large
+    // input guarantees it exits while the input is still being written, which
+    // reproduces on every platform the race that made this flaky on Linux.
+    let large_input = "가".repeat(1 << 20);
+    let output = run(&["scan", "--min-score", "1.5"], &large_input);
+    assert_eq!(output.status.code(), Some(2));
 }

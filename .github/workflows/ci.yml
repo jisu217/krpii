@@ -46,6 +46,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --locked
 
+  benchmark:
+    name: Benchmark
+    # Guards against the benchmark silently breaking and prints current results in the log.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run --release --locked -p krpii-bench
+
   msrv:
     name: Minimum supported Rust version
     runs-on: ubuntu-latest

@@ -58,11 +58,18 @@ impl Recognizer for EmailRecognizer {
             return value.to_owned();
         };
         // Keep the first character so that masked addresses stay
-        // distinguishable from one another in logs.
-        let mut chars = local.chars();
-        let first = chars.next().unwrap_or(MASK_CHAR);
-        let hidden = chars.count();
-        format!("{first}{}@{domain}", MASK_CHAR.to_string().repeat(hidden))
+        // distinguishable from one another in logs, unless it is the whole
+        // local part, in which case keeping it would mask nothing.
+        let length = local.chars().count();
+        let visible: String = if length > 1 {
+            local.chars().take(1).collect()
+        } else {
+            String::new()
+        };
+        let hidden = MASK_CHAR
+            .to_string()
+            .repeat(length - visible.chars().count());
+        format!("{visible}{hidden}@{domain}")
     }
 }
 
@@ -111,6 +118,18 @@ mod tests {
         assert_eq!(
             EmailRecognizer.mask_partial("hong@example.com"),
             "h***@example.com"
+        );
+    }
+
+    #[test]
+    fn mask_partial_hides_a_single_character_local_part() {
+        assert_eq!(
+            EmailRecognizer.mask_partial("a@example.com"),
+            "*@example.com"
+        );
+        assert_eq!(
+            EmailRecognizer.mask_partial("ab@example.com"),
+            "a*@example.com"
         );
     }
 }

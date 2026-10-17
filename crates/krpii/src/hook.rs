@@ -90,7 +90,10 @@ fn block_prompt(entities: &[Entity]) -> Value {
              `krpii mask --style tag` and resend.",
             describe(entities)
         ),
-        "suppressOriginalPrompt": true,
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "suppressOriginalPrompt": true,
+        },
     })
 }
 
@@ -192,7 +195,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(decision["decision"], "block");
-        assert_eq!(decision["suppressOriginalPrompt"], true);
+        assert_eq!(
+            decision["hookSpecificOutput"]["suppressOriginalPrompt"],
+            true
+        );
         let reason = decision["reason"].as_str().unwrap();
         assert!(reason.contains("1 value (1 PHONE)"));
         assert!(

@@ -31,7 +31,7 @@ for a hook that fires on every tool call. krpii is a 2 MiB binary that starts an
    ```
 
 | Path | What the plugin does |
-|---|---|
+|:--|:--|
 | Submitted prompt | Blocks it if it contains credentials or PII |
 | `Read` | Denies the read and suggests a command that produces masked output |
 | `Bash` and `Grep` output | Replaces each detected value with a tag such as `<RRN>` before Claude sees it |
@@ -70,7 +70,7 @@ byte span and confidence score, never the matched value.
 10,000 synthetic Korean sentences · Exact type and span matching · Seed `42`
 
 | System | PII F1 | Decoys flagged | Per invocation | Install size |
-|---|--:|--:|--:|--:|
+|:--|--:|--:|--:|--:|
 | **krpii** | **0.986** | **0.5%** | **6.4 ms** | **2.0 MiB** |
 | krpii without validation | 0.908 | 33.8% | — | — |
 | Presidio 2.2.364 | 0.857 | 17.3% | 1,520 ms | 176.3 MiB |
@@ -99,11 +99,11 @@ cargo run --release --locked -p krpii-bench
   prompts may remain in local history or transcripts, and the `Read` check skips binary files and
   files larger than 16 MiB.
 - **Detection.** Names, addresses, and unsupported formats are not detected, and a label such as
-  주문번호 (order number) before a value marks it as a business identifier, which can suppress a
-  real one. Credentials are limited to fixed-prefix formats. Previous-format passport numbers and
-  unseparated license numbers need a keyword such as 여권 or 운전면허, because without one they
-  look like serials and tracking numbers; Presidio recalls more of them at the cost of flagging
-  those look-alikes.
+  "order number" before a value marks it as a business identifier, which can suppress a real one.
+  Credentials are limited to fixed-prefix formats. Previous-format passport numbers and
+  unseparated license numbers need a nearby keyword such as "passport" or "license", because
+  without one they look like serials and tracking numbers; Presidio recalls more of them at the
+  cost of flagging those look-alikes.
 - **Masking.** Partial masking keeps part of each value; tag mode removes it entirely. Undetected
   text is left unchanged in both modes.
 

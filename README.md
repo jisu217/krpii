@@ -18,6 +18,9 @@ for a hook that fires on every tool call. krpii is a 2 MiB binary that starts an
    cargo install krpii
    ```
 
+   No Rust? Download a prebuilt binary for macOS, Linux, or Windows from
+   [Releases](https://github.com/jisu217/krpii/releases) and put it on `PATH`.
+
 2. Add the marketplace.
 
    ```sh

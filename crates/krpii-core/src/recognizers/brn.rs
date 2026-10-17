@@ -4,7 +4,9 @@ use std::sync::LazyLock;
 
 use regex::{Captures, Regex};
 
-use super::{Recognizer, group, has_digit_boundaries, mask_digits, only_digits};
+use super::{
+    Recognizer, group, has_digit_boundaries, is_labeled_non_pii, mask_digits, only_digits,
+};
 use crate::checksum::brn_is_valid;
 use crate::entity::EntityType;
 
@@ -35,7 +37,9 @@ impl Recognizer for BusinessRegistrationNumberRecognizer {
 
     fn score(&self, text: &str, captures: &Captures<'_>) -> Option<f64> {
         let matched = captures.get(0)?;
-        if !has_digit_boundaries(text, matched.start(), matched.end()) {
+        if !has_digit_boundaries(text, matched.start(), matched.end())
+            || is_labeled_non_pii(text, matched.start())
+        {
             return None;
         }
         let separator = group(captures, "s1");
@@ -82,6 +86,16 @@ mod tests {
         for text in ["123-45-67890", "123-4567891"] {
             assert!(found(text).is_empty(), "input: {text}");
         }
+    }
+
+    #[test]
+    fn rejects_checksum_valid_numbers_labelled_as_member_ids() {
+        // 5506073448 passes the BRN checksum by chance; the label marks it as a member ID.
+        assert!(
+            found("회원번호 5506073448").is_empty(),
+            "labelled member ID"
+        );
+        assert_eq!(found("사업자 5506073448"), ["5506073448"]);
     }
 
     #[test]

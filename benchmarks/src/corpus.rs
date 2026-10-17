@@ -60,6 +60,11 @@ const SEGMENT_SEPARATORS: &[&str] = &[", ", " / ", ". "];
 
 /// Share of segments that contain PII rather than a decoy.
 const PII_RATIO: f64 = 0.6;
+
+/// Share of decoys written without their label (for example a bare order ID
+/// instead of "주문번호 ..."). Real logs often omit labels, so a detector must not
+/// be rewarded for label rules beyond what such text would allow.
+const UNLABELED_DECOY_RATIO: f64 = 0.3;
 const MAX_SEGMENTS_PER_SAMPLE: usize = 3;
 
 /// Generates `count` samples deterministically from `seed`.
@@ -84,7 +89,11 @@ fn sample(rng: &mut Rng) -> Sample {
             builder.push_framed(prefix, &value, suffix, Label::Pii(entity_type));
         } else {
             let kind = *rng.pick(&DecoyKind::ALL);
-            let (prefix, suffix) = decoy_frame(kind);
+            let (prefix, suffix) = if rng.chance(UNLABELED_DECOY_RATIO) {
+                ("", "")
+            } else {
+                decoy_frame(kind)
+            };
             let value = generators::decoy(rng, kind);
             builder.push_framed(prefix, &value, suffix, Label::Decoy(kind));
         }

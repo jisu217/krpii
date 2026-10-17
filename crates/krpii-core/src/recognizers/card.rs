@@ -4,7 +4,9 @@ use std::sync::LazyLock;
 
 use regex::{Captures, Regex};
 
-use super::{Recognizer, group, has_digit_boundaries, mask_digits, only_digits};
+use super::{
+    Recognizer, group, has_digit_boundaries, is_labeled_non_pii, mask_digits, only_digits,
+};
 use crate::checksum::luhn_is_valid;
 use crate::entity::EntityType;
 
@@ -44,7 +46,9 @@ impl Recognizer for CardRecognizer {
 
     fn score(&self, text: &str, captures: &Captures<'_>) -> Option<f64> {
         let matched = captures.get(0)?;
-        if !has_digit_boundaries(text, matched.start(), matched.end()) {
+        if !has_digit_boundaries(text, matched.start(), matched.end())
+            || is_labeled_non_pii(text, matched.start())
+        {
             return None;
         }
         let separators: &[&str] = if captures.name("a1").is_some() {
@@ -114,6 +118,15 @@ mod tests {
         ] {
             assert!(found(text).is_empty(), "input: {text}");
         }
+    }
+
+    #[test]
+    fn rejects_luhn_valid_numbers_labelled_as_order_ids() {
+        // 2026101712345679 passes Luhn by chance; the label marks it as an order ID.
+        for text in ["주문번호 2026101712345679", "주문번호: 2026101712345679"] {
+            assert!(found(text).is_empty(), "input: {text}");
+        }
+        assert_eq!(found("결제 2026101712345679"), ["2026101712345679"]);
     }
 
     #[test]

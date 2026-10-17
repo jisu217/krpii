@@ -5,7 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use regex::{Captures, Regex};
 
-use super::{Recognizer, group, has_digit_boundaries, mask_digits, only_digits};
+use super::{
+    Recognizer, group, has_digit_boundaries, is_labeled_non_pii, mask_digits, only_digits,
+};
 use crate::checksum::rrn_checksum_is_valid;
 use crate::entity::EntityType;
 
@@ -45,7 +47,9 @@ impl Recognizer for ResidentRegistrationNumberRecognizer {
 
     fn score(&self, text: &str, captures: &Captures<'_>) -> Option<f64> {
         let matched = captures.get(0)?;
-        if !has_digit_boundaries(text, matched.start(), matched.end()) {
+        if !has_digit_boundaries(text, matched.start(), matched.end())
+            || is_labeled_non_pii(text, matched.start())
+        {
             return None;
         }
         let birth_date = parse_birth_date(captures)?;

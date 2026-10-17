@@ -72,7 +72,10 @@ fn sample(rng: &mut Rng) -> Sample {
     let mut builder = SampleBuilder::default();
     for index in 0..rng.range(1, MAX_SEGMENTS_PER_SAMPLE) {
         if index > 0 {
-            builder.push_text(rng.pick(SEGMENT_SEPARATORS));
+            // Bind before use: passing the result straight to `push_text` lets
+            // Rust 1.85 infer `T = str` from the parameter type and fail.
+            let separator = *rng.pick(SEGMENT_SEPARATORS);
+            builder.push_text(separator);
         }
         if rng.chance(PII_RATIO) {
             let entity_type = *rng.pick(&EntityType::ALL);

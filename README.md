@@ -79,6 +79,54 @@ patterns and digit-boundary rule but skips every validation step:
 no cost to recall.** The corpus does not yet contain 13-digit decoys shaped like resident
 registration numbers, so the effect of birth-date validation is not reflected here.
 
+### Comparison with Presidio
+
+[Presidio](https://github.com/data-privacy-stack/presidio) is the most widely used open-source
+PII detector and ships Korean recognizers. It was scored on the same corpus by the same code.
+
+| System | Precision | Recall | F1 | Decoys flagged as PII |
+|---|--:|--:|--:|--:|
+| Regex only | 0.847 | 0.990 | 0.913 | 26.6% |
+| Presidio 2.2.364 | 0.890 | 0.820 | 0.854 | 13.5% |
+| **krpii** | **0.983** | **0.990** | **0.986** | **2.6%** |
+
+Per entity, precision / recall:
+
+| Entity | Presidio 2.2.364 | krpii |
+|---|--:|--:|
+| `PHONE` | 0.676 / 0.913 | 0.988 / 0.948 |
+| `EMAIL` | 1.000 / 0.669 | 1.000 / 1.000 |
+| `CARD` | 0.997 / 0.564 | 0.967 / 1.000 |
+| `RRN` | 1.000 / 0.951 | 1.000 / 1.000 |
+| `BRN` | 0.958 / 1.000 | 0.960 / 1.000 |
+
+Cost of one invocation, which is what an editor hook pays on every event (median of 10
+fresh processes scanning one sentence on an Apple Silicon Mac):
+
+| Tool | Per invocation | Install size |
+|---|--:|--:|
+| **krpii** | **6 ms** | **1.8 MiB** |
+| Presidio 2.2.364 | 1,615 ms | 176.3 MiB |
+
+**Setup.** Presidio ships its Korean recognizers disabled, so every Korean recognizer was
+enabled, the card and e-mail recognizers were configured for Korean, and phone parsing was
+set to the KR region, with the `ko_core_news_sm` 3.8.0 spaCy model. This is Presidio's best
+available Korean configuration, not its default. Its default score threshold was kept,
+overlapping results were resolved with krpii's own rule, and surrounding brackets were
+trimmed from every system's spans before matching.
+
+**Where the differences come from.**
+
+- Card numbers and e-mail addresses followed directly by a Korean particle, as in
+  `…@example.com으로`, were not detected. Every one of the 788 card numbers followed by
+  Hangul was missed.
+- Business service numbers (`1588-xxxx`) and toll-free `080` numbers are reported as phone
+  numbers. This benchmark treats them as non-personal, which accounts for most of Presidio's
+  `PHONE` false positives. Under a policy that masks every phone number, its precision would
+  be higher.
+- Resident registration numbers separated by a space are not supported.
+- The driver-licence recognizer flagged 76 twelve-digit parcel tracking numbers.
+
 Known limitations, shown directly by these numbers:
 
 - **Unseparated digit runs.** About one in ten random 16-digit or 10-digit numbers passes
@@ -92,6 +140,16 @@ regression baseline rather than a guarantee. To reproduce them:
 ```console
 $ cargo run --release -p krpii-bench
 $ cargo run --release -p krpii-bench -- --seed 7 --samples 50000 --show-errors 5
+```
+
+To reproduce the Presidio comparison:
+
+```console
+$ python -m venv .venv && .venv/bin/pip install -r benchmarks/presidio/requirements.txt
+$ cargo run --release -p krpii-bench -- --export-corpus target/corpus.jsonl
+$ .venv/bin/python benchmarks/presidio/predict.py --corpus target/corpus.jsonl --output target/presidio.jsonl
+$ cargo run --release -p krpii-bench -- --predictions "Presidio 2.2.364=target/presidio.jsonl"
+$ cargo build --release -p krpii && .venv/bin/python benchmarks/presidio/startup.py --krpii target/release/krpii
 ```
 
 ## Name
@@ -150,6 +208,7 @@ krpii/
 │   ├─ krpii-core/   # Detection engine: recognizers, checksums, masking
 │   └─ krpii/        # CLI: the `krpii` binary
 ├─ benchmarks/       # Synthetic corpus generator and evaluation benchmark
+│   └─ presidio/     # Scripts that run Presidio on the same corpus
 └─ .github/workflows/
 ```
 
@@ -158,6 +217,7 @@ krpii/
 - [x] `krpii-core`: phone, e-mail, card, resident and business registration numbers
 - [x] `krpii` CLI: `scan`, `mask`
 - [x] Synthetic evaluation set with per-entity precision and recall (`benchmarks/`)
+- [x] Comparison with Presidio on accuracy, latency, and install size
 - [ ] Context keywords to suppress checksum collisions on order and member IDs
 - [ ] Parenthesized area codes in phone numbers
 - [ ] Python bindings (PyO3 + maturin): `pip install krpii`

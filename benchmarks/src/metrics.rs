@@ -4,6 +4,12 @@
 //! all match a gold span exactly. A correct span with the wrong type therefore
 //! counts as both a false positive and a false negative. This is the strictest
 //! common criterion, so reported numbers are a lower bound.
+//!
+//! Before matching, every predicted span is trimmed of surrounding whitespace
+//! and brackets. Some tools report `(010-1234-5678` for a number written in
+//! parentheses; the number itself was found, so the adjacent punctuation should
+//! not turn a correct detection into an error. The rule applies identically to
+//! every system and leaves krpii's own spans unchanged.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -12,6 +18,29 @@ use krpii_core::{Entity, EntityType};
 
 use crate::corpus::{Label, Sample};
 use crate::generators::DecoyKind;
+
+/// A detection to be scored, produced by krpii, the baseline, or an external tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Prediction {
+    /// `None` for types outside krpii's taxonomy, such as passport numbers
+    /// reported by another tool. These can never be correct, so they always
+    /// count as false positives.
+    pub entity_type: Option<EntityType>,
+    /// Inclusive start byte offset.
+    pub start: usize,
+    /// Exclusive end byte offset.
+    pub end: usize,
+}
+
+impl From<Entity> for Prediction {
+    fn from(entity: Entity) -> Self {
+        Self {
+            entity_type: Some(entity.entity_type),
+            start: entity.start,
+            end: entity.end,
+        }
+    }
+}
 
 /// Confusion counts for one entity type.
 #[derive(Debug, Default, Clone, Copy)]
@@ -87,6 +116,8 @@ pub enum ErrorKind {
 #[derive(Debug, Default)]
 pub struct Report {
     pub per_type: BTreeMap<EntityType, Counts>,
+    /// Detections whose type lies outside krpii's taxonomy.
+    pub other_false_positives: usize,
     pub decoys: BTreeMap<DecoyKind, DecoyCounts>,
     pub errors: Vec<ErrorExample>,
     pub samples: usize,
@@ -95,9 +126,13 @@ pub struct Report {
 }
 
 impl Report {
-    /// Micro-averaged counts across all entity types.
+    /// Micro-averaged counts across all entity types, including detections of
+    /// types outside krpii's taxonomy as false positives.
     pub fn overall(&self) -> Counts {
-        let mut total = Counts::default();
+        let mut total = Counts {
+            false_positives: self.other_false_positives,
+            ..Counts::default()
+        };
         for counts in self.per_type.values() {
             total.add(*counts);
         }
@@ -126,11 +161,16 @@ impl Report {
     }
 }
 
-/// Runs `detect` over `samples` and scores the output.
+/// Runs `predict` over `samples` and scores the output.
 ///
-/// Accepting a function rather than a concrete detector lets the same scoring
-/// run against krpii and the regex-only baseline.
-pub fn evaluate(detect: impl Fn(&str) -> Vec<Entity>, samples: &[Sample]) -> Report {
+/// `predict` receives each sample's index and text. Accepting a function
+/// rather than a concrete detector lets one scoring implementation serve
+/// krpii, the regex-only baseline, and precomputed external predictions, so
+/// every system is judged by identical rules.
+pub fn evaluate(
+    mut predict: impl FnMut(usize, &str) -> Vec<Prediction>,
+    samples: &[Sample],
+) -> Report {
     let mut report = Report {
         per_type: EntityType::ALL
             .into_iter()
@@ -144,17 +184,21 @@ pub fn evaluate(detect: impl Fn(&str) -> Vec<Entity>, samples: &[Sample]) -> Rep
         ..Report::default()
     };
 
-    for sample in samples {
+    for (index, sample) in samples.iter().enumerate() {
         let started = Instant::now();
-        let predictions = detect(&sample.text);
+        let predictions = predict(index, &sample.text);
         report.detection_time += started.elapsed();
+        let predictions: Vec<Prediction> = predictions
+            .into_iter()
+            .filter_map(|p| trim_span(&sample.text, p))
+            .collect();
         report.bytes += sample.text.len();
         score_sample(sample, &predictions, &mut report);
     }
     report
 }
 
-fn score_sample(sample: &Sample, predictions: &[Entity], report: &mut Report) {
+fn score_sample(sample: &Sample, predictions: &[Prediction], report: &mut Report) {
     let gold: Vec<(EntityType, usize, usize)> = sample
         .spans
         .iter()
@@ -166,12 +210,16 @@ fn score_sample(sample: &Sample, predictions: &[Entity], report: &mut Report) {
     let mut matched = vec![false; gold.len()];
 
     for prediction in predictions {
+        let Some(entity_type) = prediction.entity_type else {
+            report.other_false_positives += 1;
+            continue;
+        };
         let hit = gold.iter().position(|&(t, start, end)| {
-            t == prediction.entity_type && start == prediction.start && end == prediction.end
+            t == entity_type && start == prediction.start && end == prediction.end
         });
         let counts = report
             .per_type
-            .get_mut(&prediction.entity_type)
+            .get_mut(&entity_type)
             .expect("all types initialized");
         if let Some(index) = hit {
             matched[index] = true;
@@ -180,8 +228,8 @@ fn score_sample(sample: &Sample, predictions: &[Entity], report: &mut Report) {
             counts.false_positives += 1;
             report.errors.push(ErrorExample {
                 kind: ErrorKind::FalsePositive,
-                entity_type: prediction.entity_type,
-                value: prediction.as_str(&sample.text).to_owned(),
+                entity_type,
+                value: sample.text[prediction.start..prediction.end].to_owned(),
                 context: sample.text.clone(),
             });
         }
@@ -215,6 +263,20 @@ fn score_sample(sample: &Sample, predictions: &[Entity], report: &mut Report) {
     }
 }
 
+/// Shrinks `prediction` past surrounding whitespace and brackets, or returns
+/// `None` if nothing else remains.
+fn trim_span(text: &str, prediction: Prediction) -> Option<Prediction> {
+    const PADDING: &[char] = &[' ', '\t', '\n', '(', ')', '[', ']', '{', '}', '<', '>'];
+    let value = &text[prediction.start..prediction.end];
+    let leading = value.len() - value.trim_start_matches(PADDING).len();
+    let trimmed = value.trim_matches(PADDING);
+    (!trimmed.is_empty()).then(|| Prediction {
+        start: prediction.start + leading,
+        end: prediction.start + leading + trimmed.len(),
+        ..prediction
+    })
+}
+
 #[allow(clippy::cast_precision_loss)]
 fn ratio(numerator: usize, denominator: usize) -> f64 {
     if denominator == 0 {
@@ -231,8 +293,12 @@ mod tests {
     use super::*;
     use crate::corpus::Span;
 
-    fn krpii(text: &str) -> Vec<Entity> {
-        Detector::new().detect(text)
+    fn krpii(_index: usize, text: &str) -> Vec<Prediction> {
+        Detector::new()
+            .detect(text)
+            .into_iter()
+            .map(Prediction::from)
+            .collect()
     }
 
     fn sample(text: &str, spans: Vec<Span>) -> Sample {
@@ -296,6 +362,49 @@ mod tests {
         let report = evaluate(krpii, &samples);
         assert_eq!(report.decoys[&DecoyKind::MemberId].flagged, 1);
         assert_eq!(report.per_type[&EntityType::Brn].false_positives, 1);
+    }
+
+    #[test]
+    fn unknown_type_counts_as_overall_false_positive() {
+        let text = "여권 M12345678";
+        let samples = [sample(text, Vec::new())];
+        let report = evaluate(
+            |_, _| {
+                vec![Prediction {
+                    entity_type: None,
+                    start: 7,
+                    end: text.len(),
+                }]
+            },
+            &samples,
+        );
+        assert_eq!(report.other_false_positives, 1);
+        assert_eq!(report.overall().false_positives, 1);
+    }
+
+    #[test]
+    fn surrounding_brackets_do_not_turn_a_hit_into_a_miss() {
+        let text = "확인 부탁드립니다 (010-1234-5678)";
+        let number_start = text.find("010").unwrap();
+        let samples = [sample(
+            text,
+            vec![Span {
+                label: Label::Pii(EntityType::Phone),
+                start: number_start,
+                end: number_start + "010-1234-5678".len(),
+            }],
+        )];
+        let report = evaluate(
+            |_, _| {
+                vec![Prediction {
+                    entity_type: Some(EntityType::Phone),
+                    start: number_start - 1,
+                    end: number_start + "010-1234-5678".len(),
+                }]
+            },
+            &samples,
+        );
+        assert_eq!(report.per_type[&EntityType::Phone].true_positives, 1);
     }
 
     #[test]

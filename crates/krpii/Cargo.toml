@@ -1,6 +1,6 @@
 [package]
 name = "krpii"
-description = "Command-line interface for detecting and masking Korean PII."
+description = "Command-line interface for detecting and masking credentials and Korean PII."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

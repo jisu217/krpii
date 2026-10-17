@@ -97,7 +97,7 @@ fn main() -> Result<()> {
         externals.push((name.as_str(), report));
     }
 
-    let mut systems: Vec<(&str, &Report)> = vec![("Regex only", &baseline)];
+    let mut systems: Vec<(&str, &Report)> = vec![("krpii without validation", &baseline)];
     systems.extend(externals.iter().map(|(name, report)| (*name, report)));
     systems.push(("krpii", &krpii));
 

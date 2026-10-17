@@ -1,51 +1,69 @@
 # krpii
 
-Korean PII and credential detection for AI coding workflows.
+Credential and Korean PII detection for AI coding.
 
-Logs, support tickets, `.env` files, and data samples can carry personal identifiers and
-credentials into an agent session. krpii checks submitted prompts and file reads in Claude Code,
-blocking supported values before they reach the model through those paths. Detection runs locally without a model download.
+krpii checks prompts, file reads, and command output for API keys, tokens, and private keys, and
+for Korean identifiers such as resident registration, passport, and card numbers, before they
+reach the model.
 
-### Claude Code
+Existing detectors such as Presidio load a language model and take over a second per run, too slow
+for a hook that fires on every tool call. krpii is a 2 MiB binary that starts and scans in about
+6 ms.
+
+### Claude Code plugin
+
+1. Install the `krpii` binary. Building from source requires Rust 1.85+.
+
+   ```sh
+   cargo install krpii
+   ```
+
+2. Add the marketplace.
+
+   ```sh
+   claude plugin marketplace add jisu217/krpii
+   ```
+
+3. Install the plugin.
+
+   ```sh
+   claude plugin install krpii@krpii
+   ```
+
+| Path | What the plugin does |
+|---|---|
+| Submitted prompt | Blocks it if it contains credentials or PII |
+| `Read` | Denies the read and suggests a command that produces masked output |
+| `Bash` and `Grep` output | Replaces each detected value with a tag such as `<RRN>` before Claude sees it |
+
+The plugin runs `krpii hook`, so the `krpii` binary must be on `PATH`.
+
+### Command line
+
+The binary installed in step 1 above also works on its own.
 
 ```sh
-cargo install krpii
-claude plugin marketplace add jisu217/krpii
-claude plugin install krpii@krpii
-```
-
-The plugin blocks submitted prompts containing detected PII or credentials and denies `Read`
-calls on scanned files containing them. A denied read suggests a command to produce masked output; the plugin does
-not create a masked copy automatically.
-
-The `krpii` binary must be on `PATH` and include the `hook` subcommand.
-Building from source requires Rust 1.85+.
-
-### Features
-
-- **Korean-aware boundaries.** Detects identifiers followed directly by Korean particles.
-- **Validated matches.** Checks checksums, birth dates, and separator consistency.
-- **Context filtering.** Rejects numeric matches labelled as order, tracking, or customer IDs.
-- **Credential detection.** Recognizes provider API keys and tokens, private key blocks, and
-  passwords in database URLs, and ignores documentation placeholders.
-
-Supports Korean phone numbers, email addresses, payment cards, resident registration numbers,
-business registration numbers, passport numbers, driver's licence numbers, and credentials with
-fixed-prefix formats.
-
-### CLI & library
-
-```sh
-krpii mask prompt.txt --style tag --types phone,email,rrn
+krpii mask prompt.txt --style tag --types rrn,card,secret
 krpii mask application.log                 # Partial masking
 krpii scan application.log                 # JSON Lines, without matched values
 ```
 
-Omit the file or use `-` to read stdin. For Rust applications, install the library with
-`cargo add krpii-core`.
+Omit the file or use `-` to read stdin. `--types` takes any of `phone`, `email`, `card`, `rrn`,
+`brn`, `passport`, `driver_license`, and `secret`, and `--min-score` sets a confidence threshold
+from 0 to 1.
 
-`scan` reports UTF-8 byte spans and exits with `1` when it finds a match, `0` otherwise.
-`mask` exits with `0` on success; both use `2` for usage or I/O errors.
+`scan` reports UTF-8 byte spans and exits with `1` when it finds a match, `0` otherwise. `mask`
+exits with `0` on success; both use `2` for usage or I/O errors. In an interactive terminal, a
+one-line summary goes to standard error; `--quiet` hides it.
+
+### Rust library
+
+```sh
+cargo add krpii-core
+```
+
+`krpii-core` provides `detect`, `mask`, and a configurable `Detector`. An `Entity` holds only its
+byte span and confidence score, never the matched value.
 
 ### Evaluation
 
@@ -53,20 +71,21 @@ Omit the file or use `-` to read stdin. For Rust applications, install the libra
 
 | System | PII F1 | Decoys flagged | Per invocation | Install size |
 |---|--:|--:|--:|--:|
-| Regex-only baseline | 0.908 | 33.8% | — | — |
+| **krpii** | **0.986** | **0.5%** | **6.4 ms** | **2.0 MiB** |
+| krpii without validation | 0.908 | 33.8% | — | — |
 | Presidio 2.2.364 | 0.857 | 17.3% | 1,520 ms | 176.3 MiB |
-| krpii | 0.986 | 0.5% | 6.4 ms | 2.0 MiB |
 
-PII F1 covers the seven Korean PII types. Credentials are scored separately because Presidio has no
-credential recognizers: krpii reaches F1 1.000 on 1,594 synthetic keys, tokens, private keys, and
-connection-string passwords, and flags none of the documentation placeholder keys.
+- **PII F1** covers the seven Korean PII types. Credentials are scored separately because
+  Presidio has no credential recognizers: krpii reaches F1 1.000 on 1,594 synthetic keys, tokens,
+  private keys, and connection-string passwords, and flags none of the documentation placeholders.
+- **Per invocation** is the median of 100 fresh processes scanning one sentence on Apple Silicon,
+  alternating between the tools. It is the cost an editor hook pays on every event.
+- **Comparison.** *krpii without validation* uses the same patterns but skips checksums, date
+  checks, and context labels. Presidio runs with its Korean recognizers enabled and configured for
+  Korean. Every system is scored by the same code, and service numbers count as decoys.
 
-Per-invocation cost is the median of 100 fresh processes scanning one sentence on Apple Silicon,
-alternating between the tools; it is the cost an editor hook pays on every event.
-
-The corpus and detector share an author; these results do not establish real-world accuracy.
-The comparison uses a Korean-configured Presidio adapter and a separate regex baseline, with
-shared scoring. Service numbers are treated as decoys under this benchmark's policy.
+> **Note:** The corpus and detector share an author, so these results do not establish
+> real-world accuracy.
 
 ```sh
 cargo run --release --locked -p krpii-bench
@@ -74,17 +93,21 @@ cargo run --release --locked -p krpii-bench
 
 ### Limitations
 
-The plugin checks submitted prompts and `Read` calls only. Shell and search-tool output is not
-inspected; binary files and files larger than 16 MiB are skipped. Blocked prompts may still
-appear in local history or transcripts. This is a guard for specific input paths, not a complete
-boundary against data exposure.
+- **Plugin.** Only submitted prompts, `Read` calls, and `Bash` and `Grep` output are checked;
+  other tools, such as MCP servers, are not. Masking output changes only what Claude sees: the
+  command has already run, and Claude Code telemetry records the original output. Blocked
+  prompts may remain in local history or transcripts, and the `Read` check skips binary files and
+  files larger than 16 MiB.
+- **Detection.** Names, addresses, and unsupported formats are not detected, and a label such as
+  주문번호 (order number) before a value marks it as a business identifier, which can suppress a
+  real one. Credentials are limited to fixed-prefix formats. Previous-format passport numbers and
+  unseparated license numbers need a keyword such as 여권 or 운전면허, because without one they
+  look like serials and tracking numbers; Presidio recalls more of them at the cost of flagging
+  those look-alikes.
+- **Masking.** Partial masking keeps part of each value; tag mode removes it entirely. Undetected
+  text is left unchanged in both modes.
 
-Names, addresses, and unsupported formats remain unchanged; context labels can suppress valid
-matches. Credential detection covers fixed-prefix formats only, so generic passwords and
-unprefixed keys are not detected. Previous-format passport numbers and unseparated licence numbers
-are reported only after a keyword such as 여권 or 운전면허, because without one they are
-indistinguishable from serials and tracking numbers; Presidio recalls more of them at the cost of
-flagging those look-alikes. Partial masking retains identifying information. Tag mode removes detected values
-entirely, while undetected text remains unchanged in both modes.
+> **Note:** krpii guards specific input paths. It is not a complete boundary against data
+> exposure.
 
 [MIT License](LICENSE)

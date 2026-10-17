@@ -1,6 +1,6 @@
 {
   "name": "krpii",
-  "description": "Korean PII guard for Claude Code.",
+  "description": "Credential and Korean PII guard for Claude Code.",
   "owner": {
     "name": "jisu217",
     "url": "https://github.com/jisu217"
@@ -9,7 +9,7 @@
     {
       "name": "krpii",
       "source": "./plugin",
-      "description": "Blocks prompts and file reads that contain Korean PII before they reach Claude."
+      "description": "Checks prompts, file reads, and command output for credentials and Korean PII before they reach Claude."
     }
   ]
 }

@@ -69,7 +69,8 @@ fn sample(rng: &mut Rng) -> Sample {
     let mut builder = SampleBuilder::default();
     for index in 0..rng.range(1, MAX_SEGMENTS_PER_SAMPLE) {
         if index > 0 {
-            builder.push_text(rng.pick(&[", ", " / ", ". "]));
+            let separator: &str = rng.pick(&[", ", " / ", ". "]);
+            builder.push_text(separator);
         }
         if rng.chance(PII_RATIO) {
             let entity_type = *rng.pick(&EntityType::ALL);

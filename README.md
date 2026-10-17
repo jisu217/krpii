@@ -38,6 +38,62 @@ candidates permissively and reports only those that pass validation:
 > checksum. A mismatch therefore **lowers the confidence score** instead of rejecting
 > the candidate.
 
+## Evaluation
+
+Measured on a synthetic corpus of 10,000 Korean sentences containing 11,921 PII values
+and 8,031 decoys. A detection counts as correct only when its type, start, and end all
+match exactly.
+
+| Entity | Support | Precision | Recall | F1 |
+|---|--:|--:|--:|--:|
+| `PHONE` | 2,332 | 0.988 | 0.948 | 0.968 |
+| `EMAIL` | 2,420 | 1.000 | 1.000 | 1.000 |
+| `CARD` | 2,347 | 0.967 | 1.000 | 0.983 |
+| `RRN` | 2,421 | 1.000 | 1.000 | 1.000 |
+| `BRN` | 2,401 | 0.960 | 1.000 | 0.980 |
+| **Overall (micro)** | 11,921 | 0.983 | 0.990 | 0.986 |
+
+Decoys that look numeric but are not PII:
+
+| Decoy | False-positive rate |
+|---|--:|
+| Tracking numbers, amounts, timestamps, product codes, service numbers, postal codes, IPv4 addresses | 0.0% |
+| 16-digit order IDs (detected as `CARD`) | 9.1% |
+| 10-digit member IDs (detected as `BRN` or `PHONE`) | 12.9% |
+
+### Why validation matters
+
+The same corpus, scored against a regex-only baseline that uses krpii's candidate
+patterns and digit-boundary rule but skips every validation step:
+
+| Entity | Precision (regex only) | Precision (krpii) | Recall (regex only) | Recall (krpii) |
+|---|--:|--:|--:|--:|
+| `PHONE` | 0.880 | 0.988 | 0.948 | 0.948 |
+| `EMAIL` | 1.000 | 1.000 | 1.000 | 1.000 |
+| `CARD` | 0.724 | 0.967 | 1.000 | 1.000 |
+| `RRN` | 1.000 | 1.000 | 1.000 | 1.000 |
+| `BRN` | 0.719 | 0.960 | 1.000 | 1.000 |
+| **Overall (micro)** | 0.847 | 0.983 | 0.990 | 0.990 |
+
+**Validation cuts decoys flagged as PII from 26.6% to 2.6%, a tenfold reduction, at
+no cost to recall.** The corpus does not yet contain 13-digit decoys shaped like resident
+registration numbers, so the effect of birth-date validation is not reflected here.
+
+Known limitations, shown directly by these numbers:
+
+- **Unseparated digit runs.** About one in ten random 16-digit or 10-digit numbers passes
+  the Luhn or business-number checksum by chance. Context keywords will address this.
+- **Parenthesized area codes** such as `(02) 123-4567` are not detected yet, which
+  accounts for most of the `PHONE` recall gap.
+
+Synthetic data cannot capture every real-world notation, so treat these figures as a
+regression baseline rather than a guarantee. To reproduce them:
+
+```console
+$ cargo run --release -p krpii-bench
+$ cargo run --release -p krpii-bench -- --seed 7 --samples 50000 --show-errors 5
+```
+
 ## Name
 
 **KR** (the ISO country code for Korea) + **PII**.
@@ -93,6 +149,7 @@ krpii/
 ├─ crates/
 │   ├─ krpii-core/   # Detection engine: recognizers, checksums, masking
 │   └─ krpii/        # CLI: the `krpii` binary
+├─ benchmarks/       # Synthetic corpus generator and evaluation benchmark
 └─ .github/workflows/
 ```
 
@@ -100,7 +157,9 @@ krpii/
 
 - [x] `krpii-core`: phone, e-mail, card, resident and business registration numbers
 - [x] `krpii` CLI: `scan`, `mask`
-- [ ] Synthetic evaluation set with per-entity precision and recall (`benchmarks/`)
+- [x] Synthetic evaluation set with per-entity precision and recall (`benchmarks/`)
+- [ ] Context keywords to suppress checksum collisions on order and member IDs
+- [ ] Parenthesized area codes in phone numbers
 - [ ] Python bindings (PyO3 + maturin): `pip install krpii`
 - [ ] Claude Code plugin that runs `krpii` from hooks
 - [ ] Bank account numbers via surrounding context keywords

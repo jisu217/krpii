@@ -143,6 +143,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "krpii-bench"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "krpii-core",
+ "regex",
+]
+
+[[package]]
 name = "krpii-core"
 version = "0.1.0"
 dependencies = [

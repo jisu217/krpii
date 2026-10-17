@@ -14,7 +14,7 @@ categories = ["text-processing"]
 documentation = "https://docs.rs/krpii-core"
 
 [dependencies]
-regex.workspace = true
+regex-automata.workspace = true
 
 [lints]
 workspace = true

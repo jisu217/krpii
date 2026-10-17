@@ -2,19 +2,19 @@
 
 use std::sync::LazyLock;
 
-use regex::{Captures, Regex};
-
 use super::{MASK_CHAR, Recognizer, group, has_digit_boundaries, is_labeled_non_pii};
 use crate::entity::EntityType;
+use crate::pattern::{Captures, Pattern, Prefilter};
 
 /// Subscriber area codes that follow the trunk prefix `0`: mobile, Seoul,
 /// regional, and `VoIP`. Service prefixes such as `1588` or `080` are
 /// intentionally excluded because they do not identify a person.
 const AREA_CODES: &str = r"1[016789] | 2 | 3[1-3] | 4[1-4] | 5[1-5] | 6[1-4] | 70";
 
-static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(
-        r"(?x)
+static PATTERN: LazyLock<Pattern> = LazyLock::new(|| {
+    Pattern::new(
+        &format!(
+            r"(?x)
         (?:
             # Plain notation: 010-1234-5678, 02 123 4567, +82 10-1234-5678.
             (?: 0 | \+82[-.\ ]? ) (?P<area> {AREA_CODES} ) (?P<sep1>[-.\ ]?)
@@ -26,7 +26,9 @@ static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
         (?P<sep2>[-.\ ]?)
         (?P<last>[0-9]{{4}})
         "
-    ))
+        ),
+        Prefilter::Disabled,
+    )
     .expect("phone pattern is valid")
 });
 
@@ -46,8 +48,12 @@ impl Recognizer for PhoneRecognizer {
         EntityType::Phone
     }
 
-    fn pattern(&self) -> &Regex {
+    fn pattern(&self) -> &Pattern {
         &PATTERN
+    }
+
+    fn may_match(&self, text: &str) -> bool {
+        super::contains_digit(text)
     }
 
     fn score(&self, text: &str, captures: &Captures<'_>) -> Option<f64> {

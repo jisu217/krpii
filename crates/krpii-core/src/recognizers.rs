@@ -21,7 +21,7 @@ mod secret;
 
 use std::ops::Range;
 
-use regex::{Captures, Regex};
+use crate::pattern::{Captures, Pattern};
 
 use crate::entity::{Entity, EntityType};
 
@@ -33,8 +33,19 @@ pub(crate) trait Recognizer: Sync {
     /// The entity type this recognizer produces.
     fn entity_type(&self) -> EntityType;
 
-    /// The candidate-generating pattern.
-    fn pattern(&self) -> &Regex;
+    /// The candidate-generating pattern, compiled on first use.
+    fn pattern(&self) -> &Pattern;
+
+    /// Returns `false` when `text` cannot contain a match, such as text with
+    /// no digits for a numeric recognizer.
+    ///
+    /// The check runs before the pattern is first used, so a recognizer that
+    /// cannot match never pays its compile cost. This matters for the CLI,
+    /// which compiles patterns anew in every process. Implementations must
+    /// never return `false` for text the pattern could match.
+    fn may_match(&self, _text: &str) -> bool {
+        true
+    }
 
     /// Returns a confidence score for a candidate, or `None` to reject it.
     ///
@@ -62,6 +73,9 @@ pub(crate) trait Recognizer: Sync {
 
     /// Returns every validated entity of this recognizer's type in `text`.
     fn find(&self, text: &str) -> Vec<Entity> {
+        if !self.may_match(text) {
+            return Vec::new();
+        }
         let pattern = self.pattern();
         let mut entities = Vec::new();
         let mut position = 0;
@@ -226,6 +240,12 @@ fn ends_with_ignore_ascii_case(text: &str, suffix: &str) -> bool {
     text.len() >= suffix.len()
         && text.is_char_boundary(text.len() - suffix.len())
         && text[text.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+}
+
+/// Returns whether `text` contains an ASCII digit, which every numeric
+/// recognizer's pattern requires.
+pub(crate) fn contains_digit(text: &str) -> bool {
+    text.bytes().any(|b| b.is_ascii_digit())
 }
 
 /// Returns the text of an optional capture group, or `""` if it did not participate.

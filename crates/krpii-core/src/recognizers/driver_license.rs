@@ -11,15 +11,14 @@
 
 use std::sync::LazyLock;
 
-use regex::{Captures, Regex};
-
 use super::{
     Recognizer, group, has_digit_boundaries, is_labeled_non_pii, mask_digits, preceded_by_keyword,
 };
 use crate::entity::EntityType;
+use crate::pattern::{Captures, Pattern, Prefilter};
 
-static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
+static PATTERN: LazyLock<Pattern> = LazyLock::new(|| {
+    Pattern::new(
         r"(?x)
         (?:
             # Region code assigned by the National Police Agency.
@@ -29,8 +28,7 @@ static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
             (?P<name> 서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산 ) \ ?
         )
         [0-9]{2} (?P<s2>[-\ ]?) [0-9]{6} (?P<s3>[-\ ]?) [0-9]{2}
-        ",
-    )
+        ", Prefilter::Disabled)
     .expect("driver licence pattern is valid")
 });
 
@@ -50,8 +48,12 @@ impl Recognizer for DriverLicenseRecognizer {
         EntityType::DriverLicense
     }
 
-    fn pattern(&self) -> &Regex {
+    fn pattern(&self) -> &Pattern {
         &PATTERN
+    }
+
+    fn may_match(&self, text: &str) -> bool {
+        super::contains_digit(text)
     }
 
     fn score(&self, text: &str, captures: &Captures<'_>) -> Option<f64> {

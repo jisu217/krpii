@@ -2,20 +2,20 @@
 
 use std::sync::LazyLock;
 
-use regex::{Captures, Regex};
-
 use super::{MASK_CHAR, Recognizer, group};
 use crate::entity::EntityType;
+use crate::pattern::{Captures, Pattern, Prefilter};
 
 /// A pragmatic subset of RFC 5322 that covers real-world addresses while
 /// deliberately ignoring quoted local parts and IP-literal domains.
-static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
+static PATTERN: LazyLock<Pattern> = LazyLock::new(|| {
+    Pattern::new(
         r"(?x)
         (?P<local> [A-Za-z0-9] (?: [A-Za-z0-9._%+-]{0,62} [A-Za-z0-9] )? )
         @
         (?P<domain> (?: [A-Za-z0-9] (?: [A-Za-z0-9-]{0,61} [A-Za-z0-9] )? \. )+ [A-Za-z]{2,24} )
         ",
+        Prefilter::Enabled,
     )
     .expect("email pattern is valid")
 });
@@ -30,8 +30,12 @@ impl Recognizer for EmailRecognizer {
         EntityType::Email
     }
 
-    fn pattern(&self) -> &Regex {
+    fn pattern(&self) -> &Pattern {
         &PATTERN
+    }
+
+    fn may_match(&self, text: &str) -> bool {
+        text.contains('@')
     }
 
     fn score(&self, text: &str, captures: &Captures<'_>) -> Option<f64> {

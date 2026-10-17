@@ -3,23 +3,23 @@
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use regex::{Captures, Regex};
-
 use super::{
     Recognizer, group, has_digit_boundaries, is_labeled_non_pii, mask_digits, only_digits,
 };
 use crate::checksum::rrn_checksum_is_valid;
 use crate::entity::EntityType;
+use crate::pattern::{Captures, Pattern, Prefilter};
 
 /// Layout: `YYMMDD-GNNNNNN`, where `G` encodes century, sex, and nationality.
-static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
+static PATTERN: LazyLock<Pattern> = LazyLock::new(|| {
+    Pattern::new(
         r"(?x)
         (?P<yy>[0-9]{2}) (?P<mm>0[1-9]|1[0-2]) (?P<dd>0[1-9]|[12][0-9]|3[01])
         (?P<sep>[-\ ]?)
         (?P<gender>[1-8])
         [0-9]{6}
         ",
+        Prefilter::Disabled,
     )
     .expect("resident registration number pattern is valid")
 });
@@ -41,8 +41,12 @@ impl Recognizer for ResidentRegistrationNumberRecognizer {
         EntityType::Rrn
     }
 
-    fn pattern(&self) -> &Regex {
+    fn pattern(&self) -> &Pattern {
         &PATTERN
+    }
+
+    fn may_match(&self, text: &str) -> bool {
+        super::contains_digit(text)
     }
 
     fn score(&self, text: &str, captures: &Captures<'_>) -> Option<f64> {

@@ -15,13 +15,12 @@
 use std::ops::Range;
 use std::sync::LazyLock;
 
-use regex::{Captures, Regex};
-
 use super::{MASK_CHAR, Recognizer};
 use crate::entity::EntityType;
+use crate::pattern::{Captures, Pattern, Prefilter};
 
-static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
+static PATTERN: LazyLock<Pattern> = LazyLock::new(|| {
+    Pattern::new(
         r"(?x)
         (?P<token>
             sk-(?:ant-|proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}   # Anthropic, OpenAI
@@ -42,9 +41,26 @@ static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
         (?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?)://
         [^\s:/@]+ : (?P<password>[^\s@/]+) @
         ",
+        Prefilter::Enabled,
     )
     .expect("secret pattern is valid")
 });
+
+/// Substrings at least one of which every match contains, checked before the
+/// pattern is compiled. Each alternative of [`PATTERN`] must contain one of
+/// them; `detects_provider_tokens` fails if an alternative is left uncovered.
+const ANCHORS: &[&str] = &[
+    "sk-",
+    "_live_",
+    "gh",
+    "github_pat_",
+    "AKIA",
+    "ASIA",
+    "xox",
+    "AIza",
+    "-----BEGIN",
+    "://",
+];
 
 /// Known token prefixes, kept visible when a token is partially masked so the
 /// reader can tell which credential was removed. Longer prefixes come first.
@@ -113,8 +129,12 @@ impl Recognizer for SecretRecognizer {
         EntityType::Secret
     }
 
-    fn pattern(&self) -> &Regex {
+    fn pattern(&self) -> &Pattern {
         &PATTERN
+    }
+
+    fn may_match(&self, text: &str) -> bool {
+        ANCHORS.iter().any(|anchor| text.contains(anchor))
     }
 
     fn score(&self, text: &str, captures: &Captures<'_>) -> Option<f64> {

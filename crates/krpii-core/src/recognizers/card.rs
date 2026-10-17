@@ -2,16 +2,15 @@
 
 use std::sync::LazyLock;
 
-use regex::{Captures, Regex};
-
 use super::{
     Recognizer, group, has_digit_boundaries, is_labeled_non_pii, mask_digits, only_digits,
 };
 use crate::checksum::luhn_is_valid;
 use crate::entity::EntityType;
+use crate::pattern::{Captures, Pattern, Prefilter};
 
-static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
+static PATTERN: LazyLock<Pattern> = LazyLock::new(|| {
+    Pattern::new(
         r"(?x)
         # 16 digits in four groups of four: Visa, Mastercard, JCB, domestic cards.
         [0-9]{4} (?P<s1>[-\ ]?) [0-9]{4} (?P<s2>[-\ ]?) [0-9]{4} (?P<s3>[-\ ]?) [0-9]{4}
@@ -19,6 +18,7 @@ static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
         # 15 digits grouped 4-6-5: American Express.
         3[47][0-9]{2} (?P<a1>[-\ ]?) [0-9]{6} (?P<a2>[-\ ]?) [0-9]{5}
         ",
+        Prefilter::Disabled,
     )
     .expect("card pattern is valid")
 });
@@ -40,8 +40,12 @@ impl Recognizer for CardRecognizer {
         EntityType::Card
     }
 
-    fn pattern(&self) -> &Regex {
+    fn pattern(&self) -> &Pattern {
         &PATTERN
+    }
+
+    fn may_match(&self, text: &str) -> bool {
+        super::contains_digit(text)
     }
 
     fn score(&self, text: &str, captures: &Captures<'_>) -> Option<f64> {
